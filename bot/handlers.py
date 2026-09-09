@@ -15,6 +15,8 @@ from .keyboards import (
     get_url_from_key,
     get_main_menu_keyboard
 )
+from .anti_spam import check_rate_limit
+
 
 
 ADMIN_ID = os.getenv("ADMIN_ID")
@@ -165,6 +167,17 @@ async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     url = args[0].strip()
+
+    # Kiểm tra chống spam yêu cầu mở trình duyệt
+    allowed, wait_sec = check_rate_limit(user.id if user else 0, "key")
+    if not allowed:
+        await update.message.reply_text(
+            f"⏳ <b>HỆ THỐNG ĐANG BẬN!</b>\n"
+            f"Trình duyệt ảo cần thời gian nghỉ. Vui lòng chờ <b>{wait_sec}s</b> trước khi yêu cầu lấy key tiếp.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
     status_msg = await update.message.reply_text(
         f"⏳ Đang khởi động trình duyệt ảo để lấy Key từ <code>{html.escape(url)}</code>...",
         parse_mode=ParseMode.HTML
@@ -184,6 +197,17 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("getkey:"):
         short_key = data[7:]
         url = get_url_from_key(short_key) or short_key
+
+        # Kiểm tra chống spam lấy key qua nút bấm
+        allowed, wait_sec = check_rate_limit(user.id if user else 0, "key")
+        if not allowed:
+            await query.message.reply_text(
+                f"⏳ <b>HỆ THỐNG ĐANG BẬN!</b>\n"
+                f"Trình duyệt ảo cần thời gian nghỉ. Vui lòng chờ <b>{wait_sec}s</b> trước khi bấm lấy key tiếp.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
         status_msg = await query.message.reply_text(
             f"⏳ Đang khởi động trình duyệt ảo để lấy Key từ <code>{html.escape(url)}</code>...",
             parse_mode=ParseMode.HTML
@@ -271,6 +295,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not urls:
         await update.message.reply_text(
             "⚠️ Mình không tìm thấy đường link nào trong tin nhắn của bạn. Vui lòng gửi một liên kết hợp lệ (ví dụ: <code>https://...</code>)!",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # Kiểm tra chống spam gửi link
+    allowed, wait_sec = check_rate_limit(user.id if user else 0, "message")
+    if not allowed:
+        await update.message.reply_text(
+            f"⏳ <b>BẠN THAO TÁC QUÁ NHANH!</b>\n"
+            f"Vui lòng chờ <b>{wait_sec}s</b> nữa trước khi gửi link tiếp theo để tránh quá tải máy chủ.",
             parse_mode=ParseMode.HTML
         )
         return

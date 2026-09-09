@@ -8,11 +8,17 @@ PUBLIC_BYPASS_APIS = [
         "parser": lambda data: data.get("result") if data.get("status") == "success" else None
     },
     {
+        "name": "ZenithBypass",
+        "url": "https://api.zenithbypass.com/bypass?url={url}",
+        "parser": lambda data: data.get("result") or data.get("destination")
+    },
+    {
         "name": "SlinkBypass",
         "url": "https://bypass.pm/bypass2?url={url}",
         "parser": lambda data: data.get("destination") or data.get("result")
     }
 ]
+
 
 DEFAULT_HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",

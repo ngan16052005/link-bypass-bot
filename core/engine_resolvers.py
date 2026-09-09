@@ -134,20 +134,187 @@ async def resolve_pastebin(url: str) -> str | None:
         print(f"[engine_resolvers] pastebin error: {e}")
     return None
 
+async def resolve_ouo(url: str) -> str | None:
+    """
+    Bypass hệ thống rút gọn ouo.io và ouo.press bằng cách mô phỏng gửi 2 bước xác thực token.
+    """
+    try:
+        parsed = urlparse(url)
+        ouo_id = parsed.path.strip("/").split("/")[-1]
+        if not ouo_id or ouo_id in ["go", "xreall"]:
+            return None
+
+        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=12.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+            soup = BeautifulSoup(resp.text, "html.parser")
+            
+            # Tìm token bước 1
+            token_input = soup.find("input", {"name": "_token"})
+            if not token_input:
+                return None
+
+            token = token_input.get("value", "")
+            go_url = f"{parsed.scheme}://{parsed.netloc}/go/{ouo_id}"
+            
+            headers = {
+                **DEFAULT_HEADERS,
+                "Referer": url,
+                "Origin": f"{parsed.scheme}://{parsed.netloc}",
+                "Content-Type": "application/x-www-form-urlencoded"
+            }
+            
+            # Gửi bước 1
+            resp2 = await client.post(go_url, data={"_token": token}, headers=headers)
+            
+            # Ouo thường chuyển tiếp tới bước 2 hoặc đích trực tiếp
+            if str(resp2.url) != go_url and "ouo." not in urlparse(str(resp2.url)).netloc:
+                return str(resp2.url)
+                
+            soup2 = BeautifulSoup(resp2.text, "html.parser")
+            token_input2 = soup2.find("input", {"name": "_token"})
+            if token_input2:
+                token2 = token_input2.get("value", "")
+                xreall_url = f"{parsed.scheme}://{parsed.netloc}/xreall/{ouo_id}"
+                resp3 = await client.post(xreall_url, data={"_token": token2}, headers=headers)
+                final_url = str(resp3.url)
+                if "ouo." not in urlparse(final_url).netloc:
+                    return final_url
+    except Exception as e:
+        print(f"[engine_resolvers] ouo error: {e}")
+    return None
+
+def resolve_query_redirects(url: str) -> str | None:
+    """
+    Tự động bóc tách link đích được giấu trong Query Parameters (Base64, Hex, URL-encoded).
+    Hỗ trợ hàng loạt SafeLink, web blog trung gian, link rút gọn qua tham số.
+    """
+    try:
+        parsed = urlparse(url)
+        current_domain = parsed.netloc.lower()
+        queries = parse_qs(parsed.query)
+        
+        target_keys = [
+            "url", "link", "dest", "destination", "target",
+            "r", "to", "go", "safe", "u", "redirect", "out", "download"
+        ]
+        
+        for key in target_keys:
+            if key in queries and queries[key]:
+                val = queries[key][0].strip()
+                
+                # 1. Nếu là URL trực tiếp
+                if val.startswith(("http://", "https://")):
+                    if urlparse(val).netloc.lower() != current_domain:
+                        return val
+                        
+                # 2. Thử URL decode
+                unquoted = unquote(val)
+                if unquoted.startswith(("http://", "https://")):
+                    if urlparse(unquoted).netloc.lower() != current_domain:
+                        return unquoted
+
+                # 3. Thử Base64 decode
+                try:
+                    # Bổ sung padding nếu thiếu
+                    padded = val + '=' * (-len(val) % 4)
+                    decoded = base64.b64decode(padded).decode("utf-8", errors="ignore").strip()
+                    if decoded.startswith(("http://", "https://")):
+                        if urlparse(decoded).netloc.lower() != current_domain:
+                            return decoded
+                except Exception:
+                    pass
+
+                # 4. Thử Hex decode
+                try:
+                    decoded_hex = bytes.fromhex(val).decode("utf-8", errors="ignore").strip()
+                    if decoded_hex.startswith(("http://", "https://")):
+                        if urlparse(decoded_hex).netloc.lower() != current_domain:
+                            return decoded_hex
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[engine_resolvers] query_redirects error: {e}")
+    return None
+
+async def resolve_meta_and_js_redirect(url: str) -> str | None:
+    """
+    Trích xuất link chuyển tiếp thông qua thẻ <meta refresh> hoặc mã JavaScript (window.location).
+    """
+    try:
+        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=10.0, follow_redirects=True) as client:
+            resp = await client.get(url)
+            text = resp.text
+            current_domain = urlparse(url).netloc.lower()
+
+            # 1. Quét Meta Refresh: <meta http-equiv="refresh" content="0;url=https://...">
+            meta_match = re.search(r'<meta[^>]*?content=["\']\d+;\s*url=([^"\']+)["\']', text, re.IGNORECASE)
+            if meta_match:
+                dest = meta_match.group(1).strip()
+                full_dest = urljoin(str(resp.url), dest)
+                if full_dest.startswith(("http://", "https://")) and urlparse(full_dest).netloc.lower() != current_domain:
+                    return full_dest
+
+            # 2. Quét JavaScript Redirect: window.location.href / window.location.replace / location.href
+            js_match = re.search(r'(?:window\.)?location(?:\.href|\.replace)?\s*(?:=|\()\s*["\'](https?://[^"\']+)["\']', text, re.IGNORECASE)
+            if js_match:
+                dest = js_match.group(1).strip()
+                if dest.startswith(("http://", "https://")) and urlparse(dest).netloc.lower() != current_domain:
+                    return dest
+    except Exception as e:
+        print(f"[engine_resolvers] meta_js_redirect error: {e}")
+    return None
+
+def resolve_google_drive(url: str) -> str | None:
+    """
+    Chuyển đổi link xem trước Google Drive sang Direct Download Link.
+    """
+    match = re.search(r'drive\.google\.com/file/d/([a-zA-Z0-9_-]+)', url)
+    if match:
+        file_id = match.group(1)
+        return f"https://drive.google.com/uc?export=download&id={file_id}"
+    return None
+
 async def run_custom_resolvers(url: str) -> str | None:
     domain = urlparse(url).netloc.lower()
     
-    # 1. Thử giải mã AdLinkFly (Hỗ trợ hầu hết các trang rút gọn VN như linkx, link1s, megaurl...)
+    # 1. Bóc tách tham số Query Parameters (cực nhanh, không cần mạng)
+    query_res = resolve_query_redirects(url)
+    if query_res:
+        return query_res
+
+    # 2. Google Drive direct link
+    if "drive.google.com" in domain:
+        drive_res = resolve_google_drive(url)
+        if drive_res:
+            return drive_res
+
+    # 3. Thử giải mã AdLinkFly (linkx, link1s, megaurl, droplink, shrtfly...)
     adlink_res = await resolve_adlinkfly(url)
     if adlink_res:
         return adlink_res
 
-    # 2. Thử các dịch vụ chuyên biệt khác
+    # 4. Dịch vụ Ouo (ouo.io, ouo.press)
+    if "ouo.io" in domain or "ouo.press" in domain:
+        ouo_res = await resolve_ouo(url)
+        if ouo_res:
+            return ouo_res
+
+    # 5. Dịch vụ Sub2Unlock / Sub4Unlock
     if "sub2unlock" in domain or "sub4unlock" in domain:
         return await resolve_sub2unlock(url)
+
+    # 6. Mediafire
     if "mediafire.com" in domain:
         return await resolve_mediafire(url)
+
+    # 7. Pastebin
     if "pastebin.com" in domain:
         return await resolve_pastebin(url)
+
+    # 8. Quét Meta Refresh và JS Redirects nếu có
+    meta_res = await resolve_meta_and_js_redirect(url)
+    if meta_res:
+        return meta_res
         
     return None
+
