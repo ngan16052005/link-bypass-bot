@@ -54,7 +54,9 @@ class BufferLogHandler(logging.Handler):
             pass
 
 buf_handler = BufferLogHandler()
+buf_handler.setLevel(logging.INFO)
 buf_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+logging.getLogger().setLevel(logging.INFO)
 logging.getLogger().addHandler(buf_handler)
 
 # Máy chủ HTTP mini kiểm tra tình trạng sống (Health Check) để treo 24/7 trên Cloud
