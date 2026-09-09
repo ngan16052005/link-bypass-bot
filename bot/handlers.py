@@ -17,7 +17,18 @@ from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from core.bypass_manager import BypassManager
 from core.engine_traffic_key import grab_traffic_key
-from core.database import log_user, log_action, save_report, get_statistics
+from core.database import (
+    log_user,
+    log_action,
+    save_report,
+    get_statistics,
+    get_admin_id,
+    set_admin_id,
+    is_admin_user,
+    get_all_user_ids,
+    get_recent_reports,
+    clear_all_reports
+)
 from .utils import extract_urls
 from .keyboards import (
     get_result_keyboard,
@@ -97,7 +108,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user:
         log_user(user.id, user.username, user.first_name)
-    is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+    is_admin = is_admin_user(user.id if user else None)
     name = user.first_name if user and user.first_name else "bạn"
 
     # Mở bàn phím menu cố định và gửi bảng điều khiển Interactive Dashboard
@@ -116,7 +127,7 @@ async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user:
         log_user(user.id, user.username, user.first_name)
-    is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+    is_admin = is_admin_user(user.id if user else None)
     name = user.first_name if user and user.first_name else "bạn"
     await update.message.reply_text(
         get_dashboard_text(name),
@@ -129,7 +140,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user:
         log_user(user.id, user.username, user.first_name)
-    is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+    is_admin = is_admin_user(user.id if user else None)
     await update.message.reply_text(
         HELP_MESSAGE,
         parse_mode=ParseMode.HTML,
@@ -140,7 +151,7 @@ async def services_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user:
         log_user(user.id, user.username, user.first_name)
-    is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+    is_admin = is_admin_user(user.id if user else None)
     await update.message.reply_text(
         SERVICES_MESSAGE,
         parse_mode=ParseMode.HTML,
@@ -161,7 +172,7 @@ async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user:
         log_user(user.id, user.username, user.first_name)
-    is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+    is_admin = is_admin_user(user.id if user else None)
     await update.message.reply_text(
         BATCH_MESSAGE,
         parse_mode=ParseMode.HTML,
@@ -175,12 +186,17 @@ async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user:
         return
     log_user(user.id, user.username, user.first_name)
+    is_admin = is_admin_user(user.id)
 
+    status_str = "👑 <b>Trạng thái: Bạn là Admin chính thức của Bot!</b>" if is_admin else "👤 <b>Trạng thái: Người dùng thông thường</b>"
     msg = (
         f"🆔 <b>ID TELEGRAM CỦA BẠN:</b>\n"
         f"👉 <code>{user.id}</code> 👈\n"
         f"<i>(Chạm vào dãy số trên để tự động sao chép)</i>\n\n"
-        f"💡 <b>Dành cho Admin:</b> Hãy copy ID này và thêm vào Render (mục <b>Environment</b>) với biến <code>ADMIN_ID = {user.id}</code> để nhận báo cáo lỗi và mở khóa lệnh <code>/stats</code>!"
+        f"{status_str}\n\n"
+        f"💡 <b>Kích hoạt Admin:</b>\n"
+        f"• Nếu bot chưa có Admin, gõ <code>/claimadmin</code> để nhận quyền quản trị ngay!\n"
+        f"• Hoặc thêm biến môi trường <code>ADMIN_ID = {user.id}</code> trên Render."
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
@@ -190,9 +206,7 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     log_user(user.id, user.username, user.first_name)
 
-    # Nếu có ADMIN_ID thì chỉ cho phép Admin xem
-    admin_env = os.getenv("ADMIN_ID", "").strip()
-    if admin_env and str(user.id) != admin_env:
+    if not is_admin_user(user.id):
         await update.message.reply_text("⛔ Lệnh này chỉ dành riêng cho Admin quản trị Bot!")
         return
 
@@ -214,9 +228,157 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🚨 <b>Báo cáo lỗi:</b>\n"
         f"• Tổng số link báo lỗi: <code>{stats.get('total_reports', 0)}</code>\n"
         f"━━━━━━━━━━━━━━━━━━━━\n"
-        f"🟢 <i>Trạng thái: Máy chủ đám mây đang chạy 24/7</i>"
+        f"🟢 <i>Trạng thái: Máy chủ đám mây đang chạy 24/7</i>\n\n"
+        f"🛠️ <b>Lệnh Admin nhanh:</b>\n"
+        f"• <code>/broadcast [nội dung]</code> - Phát thông báo toàn server\n"
+        f"• <code>/reports</code> - Xem danh sách link lỗi gần nhất"
     )
     await update.message.reply_text(stats_msg, parse_mode=ParseMode.HTML)
+
+async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Phát thông báo đến toàn bộ người dùng trong database.
+    Hỗ trợ cả gửi text trực tiếp hoặc reply vào 1 tin nhắn (ảnh, video, văn bản, file) để copy.
+    """
+    user = update.effective_user
+    if not user or not is_admin_user(user.id):
+        await update.message.reply_text("⛔ Lệnh này chỉ dành riêng cho Admin quản trị Bot!")
+        return
+
+    replied = update.message.reply_to_message
+    broadcast_text = " ".join(context.args) if context.args else ""
+
+    if not replied and not broadcast_text:
+        await update.message.reply_text(
+            "📢 <b>HƯỚNG DẪN PHÁT THÔNG BÁO TOÀN SERVER (BROADCAST):</b>\n\n"
+            "• <b>Cách 1 (Gửi văn bản):</b> Gõ <code>/broadcast [Nội dung thông báo]</code>\n"
+            "• <b>Cách 2 (Gửi ảnh/tin nhắn mẫu):</b> Soạn tin nhắn (hoặc gửi ảnh kèm chú thích), sau đó <b>Reply</b> tin nhắn đó và gõ <code>/broadcast</code>.\n\n"
+            "💡 <i>Bot sẽ sao chép nguyên vẹn tin nhắn đó và gửi đến tất cả thành viên trong hệ thống!</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    all_users = get_all_user_ids()
+    total = len(all_users)
+    if total == 0:
+        await update.message.reply_text("⚠️ Chưa có người dùng nào trong cơ sở dữ liệu để gửi thông báo!")
+        return
+
+    status_msg = await update.message.reply_text(
+        f"⏳ <b>ĐANG BẮT ĐẦU PHÁT THÔNG BÁO...</b>\n"
+        f"👥 <b>Tổng số người nhận:</b> <code>{total}</code> tài khoản.",
+        parse_mode=ParseMode.HTML
+    )
+
+    success_count = 0
+    blocked_count = 0
+
+    for idx, target_id in enumerate(all_users, 1):
+        try:
+            if replied:
+                await context.bot.copy_message(
+                    chat_id=target_id,
+                    from_chat_id=update.effective_chat.id,
+                    message_id=replied.message_id
+                )
+            else:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=f"📢 <b>THÔNG BÁO TỪ QUẢN TRỊ VIÊN:</b>\n\n{html.escape(broadcast_text)}",
+                    parse_mode=ParseMode.HTML
+                )
+            success_count += 1
+        except Exception:
+            blocked_count += 1
+
+        if idx % 10 == 0 or idx == total:
+            try:
+                await status_msg.edit_text(
+                    f"⏳ <b>ĐANG PHÁT THÔNG BÁO...</b>\n\n"
+                    f"📊 <b>Tiến độ:</b> <code>{idx}/{total}</code>\n"
+                    f"✅ <b>Thành công:</b> <code>{success_count}</code>\n"
+                    f"⛔ <b>Bị chặn:</b> <code>{blocked_count}</code>",
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception:
+                pass
+
+        await asyncio.sleep(0.04)
+
+    await status_msg.edit_text(
+        f"🎉 <b>PHÁT THÔNG BÁO HOÀN TẤT!</b>\n\n"
+        f"📊 <b>Tổng số:</b> <code>{total}</code> người dùng\n"
+        f"✅ <b>Gửi thành công:</b> <code>{success_count}</code> (<code>{round(success_count/total*100, 1)}%</code>)\n"
+        f"⛔ <b>Bị chặn / Thất bại:</b> <code>{blocked_count}</code>",
+        parse_mode=ParseMode.HTML
+    )
+
+async def reports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem danh sách các link lỗi người dùng đã báo cáo."""
+    user = update.effective_user
+    if not user or not is_admin_user(user.id):
+        await update.message.reply_text("⛔ Lệnh này chỉ dành riêng cho Admin quản trị Bot!")
+        return
+
+    reports = get_recent_reports(limit=10)
+    if not reports:
+        await update.message.reply_text(
+            "✅ <b>DANH SÁCH BÁO CÁO LỖI TRỐNG!</b>\n"
+            "Hiện tại không có link lỗi nào cần xử lý.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    msg_lines = [
+        "📋 <b>DANH SÁCH 10 BÁO CÁO LỖI GẦN NHẤT:</b>",
+        "━━━━━━━━━━━━━━━━━━━━"
+    ]
+    for idx, r in enumerate(reports, 1):
+        uname = f"@{r['username']}" if r.get('username') else f"ID: <code>{r.get('user_id')}</code>"
+        time_str = str(r.get('created_at', ''))[:16]
+        url_esc = html.escape(r.get('url', ''))
+        msg_lines.append(f"<b>[{idx}]</b> 👤 {uname} (<i>{time_str}</i>)")
+        msg_lines.append(f"🔗 <code>{url_esc}</code>\n")
+
+    msg_lines.append("━━━━━━━━━━━━━━━━━━━━")
+    msg_lines.append("💡 <i>Gõ <code>/clearreports</code> nếu muốn xóa sạch danh sách này.</i>")
+
+    await update.message.reply_text("\n".join(msg_lines), parse_mode=ParseMode.HTML)
+
+async def clear_reports_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xóa sạch danh sách báo cáo lỗi trong database."""
+    user = update.effective_user
+    if not user or not is_admin_user(user.id):
+        await update.message.reply_text("⛔ Lệnh này chỉ dành riêng cho Admin quản trị Bot!")
+        return
+    clear_all_reports()
+    await update.message.reply_text("🗑️ Đã xóa sạch toàn bộ danh sách báo cáo lỗi trong cơ sở dữ liệu!")
+
+async def claimadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cho phép chủ sở hữu nhận quyền Admin nhanh chóng."""
+    user = update.effective_user
+    if not user:
+        return
+
+    current_admin = get_admin_id()
+    if current_admin:
+        if str(user.id) == current_admin:
+            await update.message.reply_text(f"👑 Bạn hiện đang là Admin chính thức của Bot (ID: <code>{user.id}</code>)!", parse_mode=ParseMode.HTML)
+        else:
+            await update.message.reply_text("⛔ Bot đã có Admin quản trị. Bạn không thể nhận quyền này!", parse_mode=ParseMode.HTML)
+        return
+
+    set_admin_id(user.id)
+    await update.message.reply_text(
+        f"🎉 <b>XÁC NHẬN ADMIN THÀNH CÔNG!</b>\n\n"
+        f"👑 Quản trị viên: <b>{html.escape(user.full_name)}</b> (ID: <code>{user.id}</code>)\n"
+        f"🚀 Bạn đã được kích hoạt đầy đủ các quyền quản trị:\n"
+        f"• <code>/broadcast</code> - Phát thông báo toàn server\n"
+        f"• <code>/reports</code> - Xem danh sách link lỗi người dùng báo\n"
+        f"• <code>/stats</code> - Bảng thống kê hệ thống\n"
+        f"• Tự động nhận tin nhắn cảnh báo tức thì mỗi khi có người báo lỗi link!",
+        parse_mode=ParseMode.HTML
+    )
 
 async def do_grab_key(status_msg, url: str, user_id: int):
     escaped_url = html.escape(url)
@@ -390,10 +552,48 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"🟢 <i>Trạng thái: Máy chủ đám mây đang chạy 24/7</i>"
             )
+            stats_keyboard = [
+                [InlineKeyboardButton("📋 Xem Danh Sách Báo Lỗi", callback_data="dash:admin_reports")],
+                [InlineKeyboardButton("◀️ Quay Lại Menu", callback_data="dash:back")]
+            ]
             await query.edit_message_text(
                 stats_msg,
                 parse_mode=ParseMode.HTML,
-                reply_markup=get_back_to_menu_keyboard()
+                reply_markup=InlineKeyboardMarkup(stats_keyboard)
+            )
+        elif action == "admin_reports":
+            if not is_admin:
+                await query.answer("⛔ Mục này chỉ dành riêng cho Admin quản trị Bot!", show_alert=True)
+                return
+            reports = get_recent_reports(limit=10)
+            if not reports:
+                rep_text = (
+                    "📋 <b>DANH SÁCH BÁO CÁO LỖI GẦN ĐÂY</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "✨ <i>Hiện tại không có báo cáo lỗi nào cần xử lý! Bot đang hoạt động rất tốt.</i>"
+                )
+            else:
+                rep_text = (
+                    f"📋 <b>10 BÁO CÁO LỖI GẦN NHẤT:</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                )
+                for idx, r in enumerate(reports, 1):
+                    u_info = f"@{r['username']}" if r['username'] else f"ID: {r['user_id']}"
+                    rep_text += (
+                        f"<b>{idx}. {u_info}</b> ({r['reported_at']}):\n"
+                        f"👉 <code>{html.escape(r['broken_url'])}</code>\n\n"
+                    )
+                rep_text += "💡 <i>Gõ lệnh <code>/clearreports</code> để xóa sạch danh sách khi đã xử lý xong.</i>"
+
+            keyboard = [
+                [InlineKeyboardButton("🔄 Làm Mới", callback_data="dash:admin_reports")],
+                [InlineKeyboardButton("◀️ Trở Lại Thống Kê", callback_data="dash:stats")],
+                [InlineKeyboardButton("🏠 Menu Chính", callback_data="dash:back")]
+            ]
+            await query.edit_message_text(
+                rep_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
         return
 
@@ -401,7 +601,6 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data.startswith("getkey:"):
         short_key = data[7:]
         url = get_url_from_key(short_key) or short_key
-
 
         # Kiểm tra chống spam lấy key qua nút bấm
         allowed, wait_sec = check_rate_limit(user.id if user else 0, "key")
@@ -426,14 +625,13 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         save_report(user.id if user else 0, user.username if user else "", url)
 
-        # Gửi thông báo đến Admin nếu có cấu hình ADMIN_ID
-        admin_id_str = os.getenv("ADMIN_ID", "").strip()
+        # Gửi thông báo đến Admin nếu có cấu hình ADMIN_ID hoặc đã claim
+        admin_id_str = get_admin_id()
         if admin_id_str:
             try:
                 vn_tz = timezone(timedelta(hours=7))
                 now_str = datetime.now(vn_tz).strftime("%H:%M:%S - %d/%m/%Y")
                 admin_alert = (
-
                     f"🚨 <b>BÁO CÁO LINK LỖI TỪ NGƯỜI DÙNG!</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"👤 <b>Người báo:</b> @{user.username or 'Không có'} (ID: <code>{user.id}</code>)\n"
@@ -442,7 +640,17 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"👉 Hãy kiểm tra để nâng cấp thêm engine cho link này!"
                 )
-                await context.bot.send_message(chat_id=int(admin_id_str), text=admin_alert, parse_mode=ParseMode.HTML)
+                alert_keyboard = None
+                if url.startswith("http://") or url.startswith("https://"):
+                    alert_keyboard = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("🔗 Mở Thử Link", url=url)]
+                    ])
+                await context.bot.send_message(
+                    chat_id=int(admin_id_str),
+                    text=admin_alert,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=alert_keyboard
+                )
             except Exception as e:
                 print(f"[Report] Error alerting admin: {e}")
 

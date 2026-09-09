@@ -63,6 +63,13 @@ def init_db():
         )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_bypass_cache_created ON bypass_cache(created_at)")
+        # Bảng cài đặt hệ thống động (Admin ID, cấu hình)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bot_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT
+        )
+        """)
         conn.commit()
 
 
@@ -230,6 +237,81 @@ def save_cached_bypass(original_url: str, result_url: str, engine: str = ""):
             conn.commit()
     except Exception as e:
         print(f"[DB] save_cached_bypass error: {e}")
+
+def get_setting(key: str, default: str = "") -> str:
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM bot_settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            return row["value"] if row else default
+    except Exception as e:
+        print(f"[DB] get_setting error: {e}")
+        return default
+
+def set_setting(key: str, value: str):
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO bot_settings (key, value) VALUES (?, ?)", (key, str(value).strip()))
+            conn.commit()
+    except Exception as e:
+        print(f"[DB] set_setting error: {e}")
+
+def get_admin_id() -> str:
+    env_id = os.getenv("ADMIN_ID", "").strip()
+    if env_id:
+        return env_id
+    return get_setting("admin_id", "")
+
+def set_admin_id(user_id: int | str):
+    set_setting("admin_id", str(user_id).strip())
+
+def is_admin_user(user_id: int | None) -> bool:
+    if not user_id:
+        return False
+    admin_id = get_admin_id()
+    if not admin_id:
+        return False
+    return str(user_id).strip() == admin_id
+
+def get_all_user_ids() -> list[int]:
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT user_id FROM users WHERE user_id IS NOT NULL AND user_id > 0")
+            rows = cursor.fetchall()
+            return [row["user_id"] for row in rows]
+    except Exception as e:
+        print(f"[DB] get_all_user_ids error: {e}")
+        return []
+
+def get_recent_reports(limit: int = 10) -> list[dict]:
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT id, user_id, username, url, created_at 
+            FROM reports 
+            ORDER BY created_at DESC 
+            LIMIT ?
+            """, (limit,))
+            rows = cursor.fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_recent_reports error: {e}")
+        return []
+
+def clear_all_reports() -> bool:
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM reports")
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"[DB] clear_all_reports error: {e}")
+        return False
 
 # Khởi tạo DB khi load module
 init_db()

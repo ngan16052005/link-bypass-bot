@@ -90,7 +90,8 @@ def get_dashboard_inline_keyboard(is_admin: bool = False) -> InlineKeyboardMarku
     ]
     if is_admin:
         keyboard.append([
-            InlineKeyboardButton("📊 Bảng Thống Kê Hệ Thống", callback_data="dash:stats")
+            InlineKeyboardButton("📊 Thống Kê Hệ Thống", callback_data="dash:stats"),
+            InlineKeyboardButton("📋 Báo Cáo Lỗi", callback_data="dash:admin_reports")
         ])
     return InlineKeyboardMarkup(keyboard)
 

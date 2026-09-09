@@ -32,6 +32,10 @@ from bot.handlers import (
     batch_command,
     myid_command,
     stats_command,
+    broadcast_command,
+    reports_command,
+    clear_reports_command,
+    claimadmin_command,
     key_command,
     callback_router,
     handle_message,
@@ -165,6 +169,10 @@ def main():
     app.add_handler(CommandHandler("batch", batch_command))
     app.add_handler(CommandHandler("myid", myid_command))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CommandHandler("reports", reports_command))
+    app.add_handler(CommandHandler("clearreports", clear_reports_command))
+    app.add_handler(CommandHandler("claimadmin", claimadmin_command))
     app.add_handler(CommandHandler("key", key_command))
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(InlineQueryHandler(inline_query_handler))
