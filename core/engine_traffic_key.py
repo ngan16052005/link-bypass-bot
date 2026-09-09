@@ -105,10 +105,8 @@ async def grab_traffic_key(
                 # TỐI ƯU HÓA BĂNG THÔNG: Chặn ảnh, font chữ và media nặng
                 async def route_filter(route):
                     req_url = route.request.url.lower()
-                    # Chặn extension nặng
                     if any(req_url.endswith(ext) or ext + "?" in req_url for ext in BLOCKED_EXTENSIONS):
                         await route.abort()
-                    # Chặn trackers / analytics
                     elif any(domain in req_url for domain in ["google-analytics.com", "googletagmanager.com", "facebook.net"]):
                         await route.abort()
                     else:
@@ -122,27 +120,27 @@ async def grab_traffic_key(
 
                 # 1. Truy cập trang web
                 try:
-                    await page.goto(url, wait_until="domcontentloaded", timeout=35000)
+                    await page.goto(url, wait_until="domcontentloaded", timeout=25000)
                 except Exception:
                     pass
 
                 if status_callback:
-                    await status_callback("📜 Đang cuộn trang kích hoạt bộ đếm mã...")
+                    await status_callback("📜 Đang cuộn trang kiểm tra bộ đếm mã...")
 
                 # 2. Cuộn trang mượt mà bằng JavaScript
                 try:
                     await page.evaluate("""
                         window.scrollTo({ top: document.body.scrollHeight / 2, behavior: 'smooth' });
                     """)
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.4)
                     await page.evaluate("""
                         window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
                     """)
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.4)
                 except Exception:
                     pass
 
-                # 3. Kích hoạt nút bấm nếu có
+                # 3. Kích hoạt nút bấm lấy mã nếu có
                 button_selectors = [
                     '#xacthucButton',
                     'button:has-text("LẤY MÃ")',
@@ -154,18 +152,36 @@ async def grab_traffic_key(
                     'button:has-text("BẤM VÀO ĐÂY")',
                     'button:has-text("Get Code")'
                 ]
+                button_found = False
                 for sel in button_selectors:
                     try:
                         btn = page.locator(sel).first
-                        if await btn.is_visible(timeout=800):
-                            await btn.click(timeout=1000)
+                        if await btn.is_visible(timeout=500):
+                            await btn.click(timeout=800)
+                            button_found = True
                             break
                     except Exception:
                         pass
 
+                # Kiểm tra nhanh: nếu trang không có nút và không có bất kỳ dấu hiệu nhiệm vụ lấy mã nào
+                has_task_script = False
+                try:
+                    content_lower = (await page.content()).lower()
+                    traffic_hints = [
+                        "layma", "traffic", "countdown", "xacthuc", "getcode",
+                        "lay-ma", "get-code", "demnguoc", "counter", "time_getcode"
+                    ]
+                    if any(h in content_lower for h in traffic_hints):
+                        has_task_script = True
+                except Exception:
+                    pass
+
+                if not button_found and not has_task_script:
+                    return False, "", "Trang web này không có nút lấy mã hoặc đồng hồ đếm ngược nhiệm vụ."
+
                 # 4. Vòng lặp chờ đếm ngược với thanh tiến trình trực quan
                 total_expected_wait = 60
-                max_timeout = 85
+                max_timeout = 75
                 interval = 3
                 waited = 0
 
@@ -173,13 +189,12 @@ async def grab_traffic_key(
                     if captured_key["code"]:
                         return True, captured_key["code"], "Đã nhận mã từ hệ thống thành công!"
 
-                    # Quét DOM (chỉ quét text hiển thị, loại bỏ thẻ script/style ngầm)
+                    # Quét phần tử chứa mã
                     try:
-                        # 1. Kiểm tra các phần tử hiển thị mã phổ biến
                         for code_sel in ['#traffic_code', '#show_code', '#code_output', '.layma-code', '[id*="traffic"]', '[id*="layma"]']:
                             try:
                                 el = page.locator(code_sel).first
-                                if await el.is_visible(timeout=150):
+                                if await el.is_visible(timeout=100):
                                     val = (await el.text_content() or "").strip()
                                     clean_val = re.sub(r'[^A-Za-z0-9]', '', val)
                                     if len(clean_val) >= 4 and clean_val.lower() not in EXCLUDED_KEYWORDS:
@@ -187,28 +202,17 @@ async def grab_traffic_key(
                             except Exception:
                                 pass
 
-                        # 2. Quét text hiển thị trên trang bằng innerText (không quét script)
                         text_content = await page.evaluate("() => document.body ? document.body.innerText : ''")
                         match = re.search(r'(?:Mã|Code|Key)(?:\s*của\s*bạn)?\s*[:=]\s*([A-Za-z0-9]{4,12})', text_content, re.IGNORECASE)
                         if match:
                             code_found = match.group(1).strip()
                             if code_found.lower() not in EXCLUDED_KEYWORDS:
                                 return True, code_found, "Đã đọc được mã hiển thị trên trang!"
-
-                        # Thử click nút nhận mã nếu chuyển trạng thái
-                        for sel in button_selectors:
-                            try:
-                                btn = page.locator(sel).first
-                                if await btn.is_visible(timeout=300):
-                                    await btn.click(timeout=500)
-                            except Exception:
-                                pass
                     except Exception:
                         pass
 
-
-                    # Cập nhật thanh tiến trình mỗi 6 giây
-                    if status_callback and waited > 0 and waited % 6 == 0:
+                    # Cập nhật thanh tiến trình liên tục để người dùng biết bot đang đếm
+                    if status_callback and waited > 0:
                         prog_bar = make_progress_bar(waited, total_expected_wait)
                         rem = max(0, total_expected_wait - waited)
                         if rem > 0:
@@ -222,7 +226,8 @@ async def grab_traffic_key(
                 if captured_key["code"]:
                     return True, captured_key["code"], "Đã nhận được mã!"
 
-                return False, "", "Hết thời gian chờ hoặc trang yêu cầu giải Captcha."
+                return False, "", "Hết thời gian chờ (trang web không trả về mã hoặc có captcha)."
 
             finally:
                 await browser.close()
+
