@@ -65,5 +65,6 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
             [KeyboardButton("📖 Hướng Dẫn Vượt Link"), KeyboardButton("🔑 Cách Lấy Mã 60s")],
             [KeyboardButton("📢 Hỗ Trợ / Báo Lỗi"), KeyboardButton("🆔 ID Của Tôi")]
         ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+
 
