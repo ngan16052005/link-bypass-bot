@@ -1,7 +1,7 @@
 import os
 import html
 from urllib.parse import urlparse
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from telegram import Update
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
@@ -189,8 +189,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         admin_id_str = os.getenv("ADMIN_ID", "").strip()
         if admin_id_str:
             try:
-                now_str = datetime.now().strftime("%H:%M:%S - %d/%m/%Y")
+                vn_tz = timezone(timedelta(hours=7))
+                now_str = datetime.now(vn_tz).strftime("%H:%M:%S - %d/%m/%Y")
                 admin_alert = (
+
                     f"🚨 <b>BÁO CÁO LINK LỖI TỪ NGƯỜI DÙNG!</b>\n"
                     f"━━━━━━━━━━━━━━━━━━━━\n"
                     f"👤 <b>Người báo:</b> @{user.username or 'Không có'} (ID: <code>{user.id}</code>)\n"

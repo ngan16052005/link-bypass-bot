@@ -44,7 +44,16 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        # Bảng lưu trữ ánh xạ short_key -> url bền vững
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS url_cache (
+            short_key TEXT PRIMARY KEY,
+            url TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
         conn.commit()
+
 
 def log_user(user_id: int, username: str | None, first_name: str | None):
     try:
@@ -132,5 +141,27 @@ def get_statistics() -> dict:
         print(f"[DB] get_statistics error: {e}")
         return {}
 
+def save_url_key(short_key: str, url: str):
+
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO url_cache (short_key, url) VALUES (?, ?)", (short_key, url))
+            conn.commit()
+    except Exception as e:
+        print(f"[DB] save_url_key error: {e}")
+
+def get_url_by_key(short_key: str) -> str | None:
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT url FROM url_cache WHERE short_key = ?", (short_key,))
+            row = cursor.fetchone()
+            return row["url"] if row else None
+    except Exception as e:
+        print(f"[DB] get_url_by_key error: {e}")
+        return None
+
 # Khởi tạo DB khi load module
 init_db()
+

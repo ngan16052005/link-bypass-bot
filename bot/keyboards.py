@@ -1,16 +1,25 @@
 import hashlib
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from core.database import save_url_key, get_url_by_key
 
-# Bộ nhớ tạm ánh xạ mã băm ngắn -> URL đầy đủ (đảm bảo không vượt quá giới hạn 64 bytes của Telegram callback_data)
+# Bộ nhớ tạm ánh xạ mã băm ngắn -> URL đầy đủ
 URL_MAP = {}
 
 def get_short_key(url: str) -> str:
     key = hashlib.md5(url.encode("utf-8")).hexdigest()[:12]
     URL_MAP[key] = url
+    save_url_key(key, url)
     return key
 
 def get_url_from_key(key: str) -> str | None:
-    return URL_MAP.get(key)
+    if key in URL_MAP:
+        return URL_MAP[key]
+    db_url = get_url_by_key(key)
+    if db_url:
+        URL_MAP[key] = db_url
+        return db_url
+    return None
+
 
 def get_result_keyboard(target_url: str) -> InlineKeyboardMarkup:
     """
