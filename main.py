@@ -47,7 +47,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header('Content-type', 'application/json; charset=utf-8')
         self.end_headers()
-        self.wfile.write('{"status":"ok","message":"Bot Telegram dang chay 24/7"}'.encode('utf-8'))
+        self.wfile.write('{"status":"ok","version":"v2.2_inline_active","message":"Bot Telegram dang chay 24/7"}'.encode('utf-8'))
 
     def log_message(self, format, *args):
         pass
@@ -153,7 +153,7 @@ def main():
     print("👉 Link: https://t.me/N1_link_bot")
     print("=" * 60)
 
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
     main()
