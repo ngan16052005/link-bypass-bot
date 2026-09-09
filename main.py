@@ -38,6 +38,7 @@ from bot.handlers import (
     claimadmin_command,
     history_command,
     ref_command,
+    viplist_command,
     setvip_command,
     removevip_command,
     setchannel_command,
@@ -183,6 +184,7 @@ def main():
     app.add_handler(CommandHandler("reports", reports_command))
     app.add_handler(CommandHandler("clearreports", clear_reports_command))
     app.add_handler(CommandHandler("claimadmin", claimadmin_command))
+    app.add_handler(CommandHandler(["viplist", "vips"], viplist_command))
     app.add_handler(CommandHandler("setvip", setvip_command))
     app.add_handler(CommandHandler("removevip", removevip_command))
     app.add_handler(CommandHandler("setchannel", setchannel_command))

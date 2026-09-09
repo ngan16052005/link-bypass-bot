@@ -37,7 +37,8 @@ from core.database import (
     set_channel_fsub,
     toggle_channel_fsub,
     process_referral,
-    get_referral_stats
+    get_referral_stats,
+    get_all_vip_users
 )
 from core.link_enricher import clean_url, fetch_file_metadata
 from .utils import extract_urls
@@ -305,7 +306,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"👥 <b>Người dùng:</b>\n"
         f"• Tổng số người dùng: <code>{stats.get('total_users', 0)}</code>\n"
-        f"• Hoạt động hôm nay: <code>{stats.get('today_users', 0)}</code>\n\n"
+        f"• Hoạt động hôm nay: <code>{stats.get('today_users', 0)}</code>\n"
+        f"• Thành viên VIP: <code>{stats.get('total_vips', 0)}</code> người 👑\n\n"
         f"🔗 <b>Xử lý liên kết:</b>\n"
         f"• Tổng link đã xử lý: <code>{stats.get('total_links', 0)}</code>\n"
         f"• Link xử lý hôm nay: <code>{stats.get('today_links', 0)}</code>\n"
@@ -315,10 +317,23 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"━━━━━━━━━━━━━━━━━━━━\n"
         f"🟢 <i>Trạng thái: Máy chủ đám mây đang chạy 24/7</i>\n\n"
         f"🛠️ <b>Lệnh Admin nhanh:</b>\n"
+        f"• <code>/viplist</code> - Xem danh sách thành viên VIP\n"
+        f"• <code>/setvip [id] [ngày]</code> - Cấp/Gia hạn quyền VIP\n"
+        f"• <code>/removevip [id]</code> - Hủy trạng thái VIP\n"
         f"• <code>/broadcast [nội dung]</code> - Phát thông báo toàn server\n"
         f"• <code>/reports</code> - Xem danh sách link lỗi gần nhất"
     )
-    await update.message.reply_text(stats_msg, parse_mode=ParseMode.HTML)
+    stats_keyboard = [
+        [
+            InlineKeyboardButton("👑 Danh Sách VIP", callback_data="dash:admin_viplist"),
+            InlineKeyboardButton("🚨 Link Báo Lỗi", callback_data="dash:admin_reports")
+        ]
+    ]
+    await update.message.reply_text(
+        stats_msg,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(stats_keyboard)
+    )
 
 async def broadcast_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
@@ -594,6 +609,53 @@ async def removevip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🗑️ Đã hủy trạng thái VIP của tài khoản ID: <code>{target_id}</code>.", parse_mode=ParseMode.HTML)
     except ValueError:
         await update.message.reply_text("❌ ID không hợp lệ!")
+
+async def viplist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem danh sách các thành viên VIP hiện tại (Dành cho Admin)."""
+    user = update.effective_user
+    if not user or not is_admin_user(user.id):
+        await update.message.reply_text("⛔ Lệnh này chỉ dành riêng cho Admin quản trị Bot!")
+        return
+
+    vips = get_all_vip_users()
+    if not vips:
+        await update.message.reply_text(
+            "👑 <b>DANH SÁCH THÀNH VIÊN VIP</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✨ <i>Hiện tại chưa có người dùng nào được kích hoạt quyền VIP.</i>\n\n"
+            "💡 <i>Dùng lệnh <code>/setvip [user_id] [số_ngày]</code> để cấp quyền VIP cho thành viên!</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    msg = (
+        f"👑 <b>DANH SÁCH THÀNH VIÊN VIP ({len(vips)} người)</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    for idx, v in enumerate(vips, 1):
+        u_tag = f"@{v['username']}" if v['username'] else "<i>(Không username)</i>"
+        msg += (
+            f"<b>{idx}. {html.escape(v['first_name'])}</b> ({u_tag})\n"
+            f"• Telegram ID: <code>{v['user_id']}</code> <i>(chạm để sao chép)</i>\n"
+            f"• Thời hạn VIP: <b>{v['vip_until']}</b> (còn <b>{v['days_left']} ngày</b>)\n"
+            f"• Đã vượt hôm nay: <b>{v['today_count']} link</b>\n\n"
+        )
+    msg += (
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "🛠️ <b>Thao tác nhanh cho Admin:</b>\n"
+        "• Gia hạn/Cấp VIP: <code>/setvip [id] [ngày]</code>\n"
+        "• Hủy quyền VIP: <code>/removevip [id]</code>"
+    )
+
+    keyboard = [
+        [InlineKeyboardButton("🔄 Làm Mới", callback_data="dash:admin_viplist")],
+        [InlineKeyboardButton("📊 Thống Kê Chung", callback_data="dash:stats")]
+    ]
+    await update.message.reply_text(
+        msg,
+        parse_mode=ParseMode.HTML,
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
 
 async def setchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Cài đặt Kênh Telegram bắt buộc người dùng tham gia (Dành cho Admin)."""
@@ -880,7 +942,8 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"━━━━━━━━━━━━━━━━━━━━\n"
                 f"👥 <b>Người dùng:</b>\n"
                 f"• Tổng số người dùng: <code>{stats.get('total_users', 0)}</code>\n"
-                f"• Hoạt động hôm nay: <code>{stats.get('today_users', 0)}</code>\n\n"
+                f"• Hoạt động hôm nay: <code>{stats.get('today_users', 0)}</code>\n"
+                f"• Thành viên VIP: <code>{stats.get('total_vips', 0)}</code> người 👑\n\n"
                 f"🔗 <b>Xử lý liên kết:</b>\n"
                 f"• Tổng link đã xử lý: <code>{stats.get('total_links', 0)}</code>\n"
                 f"• Link xử lý hôm nay: <code>{stats.get('today_links', 0)}</code>\n"
@@ -891,7 +954,10 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🟢 <i>Trạng thái: Máy chủ đám mây đang chạy 24/7</i>"
             )
             stats_keyboard = [
-                [InlineKeyboardButton("📋 Xem Danh Sách Báo Lỗi", callback_data="dash:admin_reports")],
+                [
+                    InlineKeyboardButton("👑 Danh Sách VIP", callback_data="dash:admin_viplist"),
+                    InlineKeyboardButton("🚨 Danh Sách Báo Lỗi", callback_data="dash:admin_reports")
+                ],
                 [InlineKeyboardButton("◀️ Quay Lại Menu", callback_data="dash:back")]
             ]
             await query.edit_message_text(
@@ -932,6 +998,47 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 rep_text,
                 parse_mode=ParseMode.HTML,
                 reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        elif action == "admin_viplist":
+            if not is_admin:
+                await query.answer("⛔ Mục này chỉ dành riêng cho Admin quản trị Bot!", show_alert=True)
+                return
+            vips = get_all_vip_users()
+            if not vips:
+                vip_text = (
+                    "👑 <b>DANH SÁCH THÀNH VIÊN VIP</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "✨ <i>Hiện tại chưa có người dùng nào được kích hoạt quyền VIP.</i>\n\n"
+                    "💡 <i>Dùng lệnh <code>/setvip [user_id] [số_ngày]</code> để cấp quyền VIP cho thành viên!</i>"
+                )
+            else:
+                vip_text = (
+                    f"👑 <b>DANH SÁCH THÀNH VIÊN VIP ({len(vips)} người):</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                )
+                for idx, v in enumerate(vips, 1):
+                    u_tag = f"@{v['username']}" if v['username'] else "<i>(Không username)</i>"
+                    vip_text += (
+                        f"<b>{idx}. {html.escape(v['first_name'])}</b> ({u_tag})\n"
+                        f"• Telegram ID: <code>{v['user_id']}</code> <i>(chạm để sao chép)</i>\n"
+                        f"• Hết hạn: <b>{v['vip_until']}</b> (còn <b>{v['days_left']} ngày</b>)\n"
+                        f"• Vượt hôm nay: <b>{v['today_count']} link</b>\n\n"
+                    )
+                vip_text += (
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "🛠️ <b>Lệnh Admin nhanh:</b>\n"
+                    "• <code>/setvip [id] [ngày]</code>\n"
+                    "• <code>/removevip [id]</code>"
+                )
+            vip_keyboard = [
+                [InlineKeyboardButton("🔄 Làm Mới", callback_data="dash:admin_viplist")],
+                [InlineKeyboardButton("◀️ Trở Lại Thống Kê", callback_data="dash:stats")],
+                [InlineKeyboardButton("🏠 Menu Chính", callback_data="dash:back")]
+            ]
+            await query.edit_message_text(
+                vip_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=InlineKeyboardMarkup(vip_keyboard)
             )
         return
 

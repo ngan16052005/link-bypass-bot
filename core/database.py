@@ -169,11 +169,16 @@ def get_statistics() -> dict:
             cursor.execute("SELECT COUNT(*) FROM reports")
             total_reports = cursor.fetchone()[0]
 
+            # Tổng số thành viên VIP
+            cursor.execute("SELECT COUNT(*) FROM user_limits WHERE is_vip = 1")
+            total_vips = cursor.fetchone()[0]
+
             rate = round((success_links / total_links * 100), 1) if total_links > 0 else 100.0
 
             return {
                 "total_users": total_users,
                 "today_users": today_users,
+                "total_vips": total_vips,
                 "total_links": total_links,
                 "today_links": today_links,
                 "success_links": success_links,
@@ -457,6 +462,55 @@ def remove_user_vip(user_id: int) -> bool:
     except Exception as e:
         print(f"[DB] remove_user_vip error: {e}")
         return False
+
+def get_all_vip_users() -> list[dict]:
+    """Lấy danh sách tất cả các tài khoản hiện đang là VIP còn hạn."""
+    vn_tz = timezone(timedelta(hours=7))
+    now = datetime.now(vn_tz)
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT l.user_id, l.vip_until, l.today_count, u.username, u.first_name
+            FROM user_limits l
+            LEFT JOIN users u ON l.user_id = u.user_id
+            WHERE l.is_vip = 1
+            ORDER BY l.vip_until DESC
+            """)
+            rows = cursor.fetchall()
+            vips = []
+            for r in rows:
+                vip_until_str = r["vip_until"]
+                is_active = True
+                days_left = 0
+                if vip_until_str:
+                    try:
+                        v_until = datetime.fromisoformat(vip_until_str)
+                        if v_until.tzinfo is None:
+                            v_until = v_until.replace(tzinfo=vn_tz)
+                        if now > v_until:
+                            is_active = False
+                            # Cập nhật hết hạn trong DB
+                            cursor.execute("UPDATE user_limits SET is_vip = 0 WHERE user_id = ?", (r["user_id"],))
+                        else:
+                            delta = v_until - now
+                            days_left = max(1, int(delta.total_seconds() // 86400) if delta.total_seconds() >= 86400 else 1)
+                    except Exception:
+                        pass
+                if is_active:
+                    vips.append({
+                        "user_id": r["user_id"],
+                        "username": r["username"] or "",
+                        "first_name": r["first_name"] or "Không tên",
+                        "vip_until": vip_until_str[:10] if vip_until_str else "Vô thời hạn",
+                        "days_left": days_left,
+                        "today_count": r["today_count"] or 0
+                    })
+            conn.commit()
+            return vips
+    except Exception as e:
+        print(f"[DB] get_all_vip_users error: {e}")
+        return []
 
 def get_user_vip_info(user_id: int, limit_per_day: int = 30) -> dict:
     """Lấy thông tin VIP và hạn mức hôm nay của người dùng."""
