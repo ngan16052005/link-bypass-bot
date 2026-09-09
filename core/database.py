@@ -1,15 +1,250 @@
 import sqlite3
 import os
+import threading
+import logging
+import atexit
 from datetime import datetime, timezone, timedelta
+from dotenv import load_dotenv
+
+load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "bot_data.db")
 
+# Cấu hình Turso Cloud Database
+TURSO_DATABASE_URL = os.getenv("TURSO_DATABASE_URL", "").strip()
+TURSO_AUTH_TOKEN = os.getenv("TURSO_AUTH_TOKEN", "").strip()
+
+# Chuẩn hóa URL Turso sang HTTPS cho giao thức Hrana HTTP ổn định tuyệt đối
+if TURSO_DATABASE_URL.startswith("libsql://"):
+    TURSO_DATABASE_URL = "https://" + TURSO_DATABASE_URL[9:]
+
+
+class TursoRow:
+    """Wrapper cho hàng dữ liệu Turso để tương thích 100% với sqlite3.Row."""
+    def __init__(self, columns: list[str] | tuple[str, ...], values: list | tuple):
+        self._columns = list(columns)
+        self._values = list(values)
+        self._dict = dict(zip(self._columns, self._values))
+
+    def __getitem__(self, key):
+        if isinstance(key, int):
+            return self._values[key]
+        return self._dict[key]
+
+    def __iter__(self):
+        # Trả về các cặp (key, value) để dict(row) hoạt động y hệt sqlite3.Row
+        return iter(self._dict.items())
+
+    def __len__(self):
+        return len(self._values)
+
+    def __repr__(self):
+        return f"<TursoRow {self._dict}>"
+
+    def keys(self):
+        return self._dict.keys()
+
+    def values(self):
+        return self._dict.values()
+
+    def items(self):
+        return self._dict.items()
+
+    def get(self, key, default=None):
+        return self._dict.get(key, default)
+
+
+class TursoCursor:
+    """Cursor wrapper tương thích sqlite3.Cursor."""
+    def __init__(self, client):
+        self.client = client
+        self._rows = []
+        self._row_idx = 0
+        self._columns = []
+        self.rowcount = -1
+
+    def execute(self, query: str, params: tuple | list = ()):
+        clean_params = list(params) if isinstance(params, (tuple, list)) else []
+        res = self.client.execute(query, clean_params)
+        self._columns = list(res.columns) if hasattr(res, "columns") and res.columns else []
+        self._rows = [TursoRow(self._columns, r) for r in res.rows]
+        self._row_idx = 0
+        self.rowcount = len(self._rows)
+        return self
+
+    def executemany(self, query: str, seq_of_params):
+        for params in seq_of_params:
+            self.execute(query, params)
+        return self
+
+    def fetchone(self):
+        if self._row_idx < len(self._rows):
+            row = self._rows[self._row_idx]
+            self._row_idx += 1
+            return row
+        return None
+
+    def fetchall(self):
+        remaining = self._rows[self._row_idx:]
+        self._row_idx = len(self._rows)
+        return remaining
+
+    def close(self):
+        pass
+
+
+class TursoConnection:
+    """Connection wrapper tương thích sqlite3.Connection và context manager."""
+    def __init__(self, client):
+        self.client = client
+
+    def cursor(self):
+        return TursoCursor(self.client)
+
+    def execute(self, query: str, params: tuple | list = ()):
+        cur = self.cursor()
+        return cur.execute(query, params)
+
+    def commit(self):
+        pass
+
+    def rollback(self):
+        pass
+
+    def close(self):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        pass
+
+
+_turso_client = None
+_turso_lock = threading.Lock()
+
+
+def is_cloud_db() -> bool:
+    """Kiểm tra xem hệ thống có đang dùng Turso Cloud DB hay không."""
+    return bool(TURSO_DATABASE_URL and TURSO_AUTH_TOKEN)
+
+
+def _get_turso_client():
+    """Lấy hoặc khởi tạo singleton client kết nối Turso Cloud."""
+    global _turso_client
+    if _turso_client is not None and not getattr(_turso_client, "closed", False):
+        return _turso_client
+
+    with _turso_lock:
+        if _turso_client is not None and not getattr(_turso_client, "closed", False):
+            return _turso_client
+        try:
+            import collections
+            import asyncio
+            import libsql_client
+            import libsql_client.sync
+
+            # Patch _AsyncExecutor de luong chay la Daemon thread, khong gay treo tien trinh khi exit
+            if not getattr(libsql_client.sync, "_daemon_patched", False):
+                def _patched_async_init(self):
+                    self._thread = threading.Thread(target=self._run, name="libsql_client", daemon=True)
+                    self._loop = asyncio.new_event_loop()
+                    self._lock = threading.Lock()
+                    self._closed = False
+                    self._queue = collections.deque()
+                    self._waker = None
+                    self._thread.start()
+
+                libsql_client.sync._AsyncExecutor.__init__ = _patched_async_init
+                libsql_client.sync._daemon_patched = True
+
+            _turso_client = libsql_client.create_client_sync(
+                url=TURSO_DATABASE_URL,
+                auth_token=TURSO_AUTH_TOKEN
+            )
+            return _turso_client
+        except Exception as e:
+            logger.error(f"[DB] Loi ket noi Turso Cloud: {e}")
+            raise
+
+
+def close_turso_client():
+    """Dong ket noi Turso Cloud khi thoat tien trinh."""
+    global _turso_client
+    if _turso_client is not None and not getattr(_turso_client, "closed", False):
+        try:
+            _turso_client.close()
+        except Exception:
+            pass
+        _turso_client = None
+
+
+atexit.register(close_turso_client)
+
+
 def get_db():
+    """Lấy kết nối cơ sở dữ liệu (ưu tiên Turso Cloud, fallback SQLite)."""
+    if is_cloud_db():
+        try:
+            client = _get_turso_client()
+            return TursoConnection(client)
+        except Exception as e:
+            logger.error(f"[DB] Khong the ket noi Turso Cloud, fallback sang SQLite: {e}")
+
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
+
+def migrate_local_to_turso_if_needed():
+    """Tự động chuyển dữ liệu từ file SQLite cũ bot_data.db lên Turso Cloud một lần duy nhất."""
+    if not is_cloud_db() or not os.path.exists(DB_PATH):
+        return
+    try:
+        with get_db() as conn:
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM users")
+            row = cur.fetchone()
+            turso_count = row[0] if row else 0
+            if turso_count > 0:
+                return  # Đã có dữ liệu trên Turso, không cần migrate lại
+
+        print("[DB] Phat hien Turso Cloud DB moi, dang tu dong dong bo tu bot_data.db...")
+        local_conn = sqlite3.connect(DB_PATH)
+        local_cur = local_conn.cursor()
+
+        tables = ["users", "link_history", "reports", "url_cache", "bypass_cache", "bot_settings", "user_limits", "referrals"]
+        with get_db() as conn:
+            for table in tables:
+                try:
+                    local_cur.execute(f"PRAGMA table_info({table})")
+                    columns = [col[1] for col in local_cur.fetchall()]
+                    if not columns:
+                        continue
+                    col_str = ", ".join(columns)
+                    placeholders = ", ".join(["?"] * len(columns))
+
+                    local_cur.execute(f"SELECT {col_str} FROM {table}")
+                    rows = local_cur.fetchall()
+                    if rows:
+                        for r in rows:
+                            conn.cursor().execute(f"INSERT OR REPLACE INTO {table} ({col_str}) VALUES ({placeholders})", list(r))
+                        print(f"[DB] Da dong bo bang {table}: {len(rows)} ban ghi len Turso Cloud.")
+                except Exception as ex:
+                    print(f"[DB] Bo qua bang {table}: {ex}")
+
+        local_conn.close()
+        print("[DB] Dong bo du lieu len Turso Cloud hoan tat 100%!")
+    except Exception as e:
+        print(f"[DB] Loi tu dong dong bo Turso: {e}")
+
+
 def init_db():
+    db_type = "Turso Cloud (libSQL)" if is_cloud_db() else f"SQLite Local ({DB_PATH})"
+    print(f"[DB] Khoi tao co so du lieu: {db_type}")
     with get_db() as conn:
         cursor = conn.cursor()
         # Bảng người dùng
@@ -31,7 +266,8 @@ def init_db():
             action_type TEXT,
             status TEXT,
             engine TEXT,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            result_url TEXT
         )
         """)
         # Bảng báo cáo lỗi
@@ -96,6 +332,9 @@ def init_db():
         except Exception:
             pass
         conn.commit()
+
+    if is_cloud_db():
+        migrate_local_to_turso_if_needed()
 
 
 def log_user(user_id: int, username: str | None, first_name: str | None):
