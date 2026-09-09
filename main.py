@@ -20,6 +20,7 @@ from telegram.ext import (
     CommandHandler,
     MessageHandler,
     CallbackQueryHandler,
+    InlineQueryHandler,
     ContextTypes,
     filters
 )
@@ -34,7 +35,8 @@ from bot.handlers import (
     key_command,
     callback_router,
     handle_message,
-    handle_document
+    handle_document,
+    inline_query_handler
 )
 
 
@@ -139,6 +141,7 @@ def main():
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("key", key_command))
     app.add_handler(CallbackQueryHandler(callback_router))
+    app.add_handler(InlineQueryHandler(inline_query_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 

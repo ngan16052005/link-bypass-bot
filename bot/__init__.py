@@ -9,7 +9,8 @@ from .handlers import (
     key_command,
     callback_router,
     handle_message,
-    handle_document
+    handle_document,
+    inline_query_handler
 )
 
 __all__ = [
@@ -23,7 +24,8 @@ __all__ = [
     "key_command",
     "callback_router",
     "handle_message",
-    "handle_document"
+    "handle_document",
+    "inline_query_handler"
 ]
 
 

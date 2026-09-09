@@ -2,9 +2,16 @@ import os
 import io
 import asyncio
 import html
+import hashlib
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
-from telegram import Update
+from telegram import (
+    Update,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton
+)
 from telegram.ext import ContextTypes
 from telegram.constants import ParseMode
 from core.bypass_manager import BypassManager
@@ -718,4 +725,158 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         await status_msg.edit_text(f"⚠️ Có lỗi xảy ra trong quá trình xử lý file: {html.escape(str(e))}")
+
+
+async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Xử lý tra cứu trực tiếp trong mọi nhóm chat hoặc kênh Telegram (Inline Query Mode):
+    Người dùng chỉ cần gõ: @N1_link_bot [đường_link]
+    """
+    inline_query = update.inline_query
+    if not inline_query:
+        return
+
+    query = inline_query.query.strip()
+    user = update.effective_user
+    if user:
+        log_user(user.id, user.username, user.first_name)
+
+    results = []
+
+    # 1. Trường hợp query trống: Hiển thị các thẻ gợi ý hữu ích
+    if not query:
+        results.append(
+            InlineQueryResultArticle(
+                id="hint_paste_link",
+                title="⚡ Dán link rút gọn vào đây để giải mã",
+                description="Ví dụ: @N1_link_bot https://ouo.io/xyz",
+                input_message_content=InputTextMessageContent(
+                    "💡 <b>HƯỚNG DẪN TRA CỨU NHANH (INLINE MODE):</b>\n\n"
+                    "Tại bất kỳ nhóm chat hay kênh nào, bạn chỉ cần gõ:\n"
+                    "<code>@N1_link_bot [link_rút_gọn]</code>\n\n"
+                    "Kết quả link gốc sẽ hiện ra ngay lập tức dưới dạng thẻ xem trước để bạn gửi vào nhóm!",
+                    parse_mode=ParseMode.HTML
+                ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🤖 Mở Bot @N1_link_bot", url="https://t.me/N1_link_bot")]
+                ])
+            )
+        )
+        results.append(
+            InlineQueryResultArticle(
+                id="hint_services",
+                title="🌐 Danh sách dịch vụ hỗ trợ",
+                description="Ouo, Link1s, Sub2Unlock, AdLinkFly, Bitly, TinyURL, Google Drive, Mediafire...",
+                input_message_content=InputTextMessageContent(
+                    SERVICES_MESSAGE,
+                    parse_mode=ParseMode.HTML
+                ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🤖 Mở Bot @N1_link_bot", url="https://t.me/N1_link_bot")]
+                ])
+            )
+        )
+        results.append(
+            InlineQueryResultArticle(
+                id="hint_key",
+                title="🔑 Hướng dẫn lấy mã đếm ngược 60s",
+                description="Tự động bóc tách mã 60s từ bài viết Google / link đếm ngược",
+                input_message_content=InputTextMessageContent(
+                    "🔑 <b>TỰ ĐỘNG LẤY MÃ ĐẾM NGƯỢC 60 GIÂY:</b>\n\n"
+                    "Bot hỗ trợ mở trình duyệt ngầm, cuộn trang tìm nút và chờ đếm ngược 60 giây để lấy mã cho bạn!\n\n"
+                    "👉 Hãy mở @N1_link_bot và gửi link bài viết hoặc dùng lệnh <code>/key [link]</code> nhé!",
+                    parse_mode=ParseMode.HTML
+                ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🚀 Mở Bot Lấy Mã 60s", url="https://t.me/N1_link_bot")]
+                ])
+            )
+        )
+        await inline_query.answer(results, cache_time=300)
+        return
+
+    # 2. Người dùng đã nhập nội dung: Trích xuất danh sách link
+    urls = extract_urls(query)
+    if not urls:
+        results.append(
+            InlineQueryResultArticle(
+                id="no_url_found",
+                title="⚠️ Chưa tìm thấy đường link hợp lệ",
+                description=f"Nội dung: '{query[:40]}...' (Cần link bắt đầu bằng http:// hoặc https://)",
+                input_message_content=InputTextMessageContent(
+                    f"⚠️ Không nhận diện được link hợp lệ trong: <code>{html.escape(query)}</code>\n\n"
+                    "👉 Cú pháp mẫu: <code>@N1_link_bot https://ouo.io/...</code>",
+                    parse_mode=ParseMode.HTML
+                ),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🤖 Mở Bot @N1_link_bot", url="https://t.me/N1_link_bot")]
+                ])
+            )
+        )
+        await inline_query.answer(results, cache_time=10)
+        return
+
+    target_url = urls[0]
+
+    # Thực hiện giải mã với timeout an toàn 8 giây
+    try:
+        bypass_task = asyncio.create_task(BypassManager.bypass(target_url))
+        res = await asyncio.wait_for(bypass_task, timeout=8.0)
+    except asyncio.TimeoutError:
+        res = None
+    except Exception:
+        res = None
+
+    if res and res.success:
+        dest_domain = urlparse(res.result_url).netloc or "Link gốc"
+        article_id = hashlib.md5(f"ok_{target_url}".encode()).hexdigest()
+        msg_text = (
+            f"⚡ <b>KẾT QUẢ VƯỢT LINK (INLINE):</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 <b>Link đích:</b> <code>{html.escape(res.result_url)}</code>\n"
+            f"🌐 <b>Link gốc:</b> <code>{html.escape(target_url)}</code>\n"
+            f"⚙️ <b>Công nghệ:</b> <code>{html.escape(res.engine_used)} ({res.time_taken}s)</code>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🤖 <i>Giải mã siêu tốc bởi @N1_link_bot</i>"
+        )
+        buttons = []
+        if res.result_url.startswith(("http://", "https://")):
+            buttons.append([InlineKeyboardButton("🔗 Mở Link Đích", url=res.result_url)])
+        buttons.append([InlineKeyboardButton("🤖 Mở Bot @N1_link_bot", url="https://t.me/N1_link_bot")])
+
+        results.append(
+            InlineQueryResultArticle(
+                id=article_id,
+                title=f"✅ Vượt thành công: {dest_domain}",
+                description=f"Link đích: {res.result_url}",
+                input_message_content=InputTextMessageContent(msg_text, parse_mode=ParseMode.HTML),
+                reply_markup=InlineKeyboardMarkup(buttons)
+            )
+        )
+        if user:
+            log_action(user.id, "inline_bypass", target_url, True, res.engine_used)
+    else:
+        article_id = hashlib.md5(f"fail_{target_url}".encode()).hexdigest()
+        orig_domain = urlparse(target_url).netloc or target_url
+        msg_text = (
+            f"⚠️ <b>CHƯA THỂ GIẢI MÃ TỰ ĐỘNG (INLINE):</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🌐 <b>Đường link:</b> <code>{html.escape(target_url)}</code>\n\n"
+            f"💡 <i>Đường link này có thể cần thực hiện nhiệm vụ lấy mã 60s hoặc cần giải mã chuyên sâu. Hãy mở Bot để được xử lý tốt nhất!</i>"
+        )
+        results.append(
+            InlineQueryResultArticle(
+                id=article_id,
+                title=f"⚠️ Mở Bot để giải mã: {orig_domain}",
+                description="Link này cần xử lý nâng cao hoặc lấy mã 60s",
+                input_message_content=InputTextMessageContent(msg_text, parse_mode=ParseMode.HTML),
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🚀 Mở Bot Giải Mã Chuyên Sâu", url="https://t.me/N1_link_bot?start=help")]
+                ])
+            )
+        )
+        if user:
+            log_action(user.id, "inline_bypass", target_url, False, "Inline Failed / Timeout")
+
+    await inline_query.answer(results, cache_time=300)
 
