@@ -25,6 +25,7 @@ from telegram.ext import (
 )
 from bot.handlers import (
     start_command,
+    menu_command,
     help_command,
     services_command,
     batch_command,
@@ -83,6 +84,7 @@ async def post_init(application) -> None:
     """Đăng ký danh sách lệnh trực quan hiển thị tại nút Menu của Telegram."""
     commands = [
         BotCommand("start", "🚀 Bắt đầu / Làm mới bot"),
+        BotCommand("menu", "⚡ Bảng điều khiển trung tâm"),
         BotCommand("help", "📖 Hướng dẫn sử dụng chi tiết"),
         BotCommand("batch", "📁 Vượt link hàng loạt bằng file .txt"),
         BotCommand("services", "🌐 Danh sách dịch vụ hỗ trợ"),
@@ -129,6 +131,7 @@ def main():
 
     app.add_error_handler(error_handler)
     app.add_handler(CommandHandler("start", start_command))
+    app.add_handler(CommandHandler("menu", menu_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("services", services_command))
     app.add_handler(CommandHandler("batch", batch_command))

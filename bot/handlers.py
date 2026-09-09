@@ -15,9 +15,12 @@ from .keyboards import (
     get_result_keyboard,
     get_fail_keyboard,
     get_url_from_key,
-    get_main_menu_keyboard
+    get_main_menu_keyboard,
+    get_dashboard_inline_keyboard,
+    get_back_to_menu_keyboard
 )
 from .anti_spam import check_rate_limit
+
 
 
 
@@ -69,16 +72,47 @@ SERVICES_MESSAGE = (
 )
 
 
+def get_dashboard_text(user_name: str) -> str:
+    return (
+        "╔═══════════════════════════════╗\n"
+        "║  ⚡ <b>LINK BYPASS & KEY AUTOMATION PRO</b> ║\n"
+        "╚═══════════════════════════════╝\n\n"
+        f"👋 Xin chào, <b>{html.escape(user_name)}</b>!\n\n"
+        "🤖 Hệ thống giải mã liên kết rút gọn & bóc tách mã 60s tự động chạy 24/7 trên Cloud.\n\n"
+        "💡 <b>Lựa chọn tính năng nhanh từ Menu bên dưới:</b>"
+    )
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user:
         log_user(user.id, user.username, user.first_name)
     is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+    name = user.first_name if user and user.first_name else "bạn"
+
+    # Mở bàn phím menu cố định và gửi bảng điều khiển Interactive Dashboard
     await update.message.reply_text(
-        WELCOME_MESSAGE,
+        "🚀 <i>Đang mở bảng điều khiển...</i>",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_menu_keyboard(is_admin)
     )
+    await update.message.reply_text(
+        get_dashboard_text(name),
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_dashboard_inline_keyboard(is_admin)
+    )
+
+async def menu_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user:
+        log_user(user.id, user.username, user.first_name)
+    is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+    name = user.first_name if user and user.first_name else "bạn"
+    await update.message.reply_text(
+        get_dashboard_text(name),
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_dashboard_inline_keyboard(is_admin)
+    )
+
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -254,10 +288,109 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data or ""
 
+    # Xử lý Bảng Điều Khiển Interactive Dashboard (chuyển trang ngay tại chỗ)
+    if data.startswith("dash:"):
+        action = data[5:]
+        is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+        name = user.first_name if user and user.first_name else "bạn"
+
+        if action in ["menu", "refresh"]:
+            await query.edit_message_text(
+                get_dashboard_text(name),
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_dashboard_inline_keyboard(is_admin)
+            )
+        elif action == "help":
+            await query.edit_message_text(
+                HELP_MESSAGE,
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_back_to_menu_keyboard()
+            )
+        elif action == "key":
+            key_info = (
+                "🔑 <b>HƯỚNG DẪN TỰ ĐỘNG LẤY MÃ ĐẾM NGƯỢC 60 GIÂY:</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "Khi trang rút gọn yêu cầu bạn tìm Google để vào 1 trang bài viết lấy mã:\n\n"
+                "👉 <b>Cách 1 (Nhanh nhất):</b> Bạn chỉ cần copy link bài viết đó và <b>dán thẳng vào chat</b>. Bot sẽ tự động hiện nút <code>[🔑 Tự Động Lấy Key Trên Web Này]</code> để bạn bấm!\n\n"
+                "👉 <b>Cách 2:</b> Gõ theo cú pháp lệnh:\n"
+                "<code>/key [link_bài_viết]</code>\n"
+                "<i>(Ví dụ: <code>/key https://tabare.com.co/vi-vn/</code>)</i>\n\n"
+                "⚡ <i>Bot sẽ tự động mở trình duyệt ngầm, cuộn trang, chờ đếm ngược 60s và trả mã ngay cho bạn!</i>"
+            )
+            await query.edit_message_text(
+                key_info,
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_back_to_menu_keyboard()
+            )
+        elif action == "batch":
+            await query.edit_message_text(
+                BATCH_MESSAGE,
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_back_to_menu_keyboard()
+            )
+        elif action == "services":
+            await query.edit_message_text(
+                SERVICES_MESSAGE,
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_back_to_menu_keyboard()
+            )
+        elif action == "myid":
+            myid_text = (
+                f"🆔 <b>ID TELEGRAM CỦA BẠN:</b>\n"
+                f"👉 <code>{user.id}</code> 👈\n"
+                f"<i>(Chạm vào dãy số trên để tự động sao chép)</i>"
+            )
+            await query.edit_message_text(
+                myid_text,
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_back_to_menu_keyboard()
+            )
+        elif action == "report_info":
+            report_info = (
+                "📢 <b>HƯỚNG DẪN BÁO LỖI LINK CHO ADMIN:</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "• Khi bạn gửi link mà bot không vượt được hoặc trang bị lỗi:\n"
+                "• Bot sẽ lập tức hiển thị nút bấm <b>[📢 Báo Lỗi Link Này Cho Admin]</b>.\n"
+                "• Khi bạn chạm vào nút đó, link lỗi sẽ được gửi trực tiếp đến Admin để nâng cấp bộ giải mã sớm nhất!\n\n"
+                "💡 <i>Hãy thử dán bất kỳ link nào vào đây để trải nghiệm nhé!</i>"
+            )
+            await query.edit_message_text(
+                report_info,
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_back_to_menu_keyboard()
+            )
+        elif action == "stats":
+            if not is_admin:
+                await query.answer("⛔ Mục này chỉ dành riêng cho Admin quản trị Bot!", show_alert=True)
+                return
+            stats = get_statistics()
+            stats_msg = (
+                f"📊 <b>BẢNG THỐNG KÊ HOẠT ĐỘNG BOT</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"👥 <b>Người dùng:</b>\n"
+                f"• Tổng số người dùng: <code>{stats.get('total_users', 0)}</code>\n"
+                f"• Hoạt động hôm nay: <code>{stats.get('today_users', 0)}</code>\n\n"
+                f"🔗 <b>Xử lý liên kết:</b>\n"
+                f"• Tổng link đã xử lý: <code>{stats.get('total_links', 0)}</code>\n"
+                f"• Link xử lý hôm nay: <code>{stats.get('today_links', 0)}</code>\n"
+                f"• Vượt thành công: <code>{stats.get('success_links', 0)}</code> (<code>{stats.get('success_rate', 100)}%</code>)\n\n"
+                f"🚨 <b>Báo cáo lỗi:</b>\n"
+                f"• Tổng số link báo lỗi: <code>{stats.get('total_reports', 0)}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"🟢 <i>Trạng thái: Máy chủ đám mây đang chạy 24/7</i>"
+            )
+            await query.edit_message_text(
+                stats_msg,
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_back_to_menu_keyboard()
+            )
+        return
+
     # Xử lý nút Lấy Key
     if data.startswith("getkey:"):
         short_key = data[7:]
         url = get_url_from_key(short_key) or short_key
+
 
         # Kiểm tra chống spam lấy key qua nút bấm
         allowed, wait_sec = check_rate_limit(user.id if user else 0, "key")
@@ -320,18 +453,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await handle_document(update, context)
         return
 
-    # 1. Bắt các nút bấm từ bàn phím Menu
+    # 1. Bắt các nút bấm từ bàn phím Menu (Hỗ trợ cả tên mới ngắn gọn lẫn tên cũ)
     clean_text = text.strip()
-    if clean_text == "📖 Hướng Dẫn Vượt Link":
+    if clean_text in ["⚡ Vượt Link", "📖 Hướng Dẫn Vượt Link", "📖 Hướng Dẫn"]:
         await help_command(update, context)
         return
-    elif clean_text == "📁 Vượt Link File .txt":
+    elif clean_text in ["📁 Vượt File .txt", "📁 Vượt Link File .txt"]:
         await batch_command(update, context)
         return
-    elif clean_text == "🌐 Dịch Vụ Hỗ Trợ":
+    elif clean_text in ["🌐 Dịch Vụ", "🌐 Dịch Vụ Hỗ Trợ"]:
         await services_command(update, context)
         return
-    elif clean_text == "🔑 Cách Lấy Mã 60s":
+    elif clean_text in ["🔑 Lấy Mã 60s", "🔑 Cách Lấy Mã 60s"]:
         msg = (
             "🔑 <b>HƯỚNG DẪN TỰ ĐỘNG LẤY MÃ ĐẾM NGƯỢC 60 GIÂY:</b>\n\n"
             "Khi trang rút gọn yêu cầu bạn tìm Google để vào 1 trang bài viết lấy mã:\n\n"
@@ -343,13 +476,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         return
-    elif clean_text == "📊 Thống Kê (Admin)":
+    elif clean_text in ["📊 Thống Kê (Admin)", "📊 Thống Kê"]:
         await stats_command(update, context)
         return
-    elif clean_text == "🆔 ID Của Tôi":
+    elif clean_text in ["🆔 ID Của Tôi", "🆔 ID"]:
         await myid_command(update, context)
         return
-    elif clean_text == "📢 Hỗ Trợ / Báo Lỗi":
+    elif clean_text in ["📢 Hỗ Trợ", "📢 Hỗ Trợ / Báo Lỗi"]:
         msg = (
             "📢 <b>HỖ TRỢ & BÁO LỖI LINK:</b>\n\n"
             "• Nếu bạn gặp link rút gọn nào bot chưa giải mã được, bạn chỉ cần gửi link đó vào khung chat.\n"
@@ -359,6 +492,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         return
+
 
     urls = extract_urls(text)
     if not urls:

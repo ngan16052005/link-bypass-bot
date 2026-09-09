@@ -1,5 +1,6 @@
 from .handlers import (
     start_command,
+    menu_command,
     help_command,
     services_command,
     batch_command,
@@ -13,6 +14,7 @@ from .handlers import (
 
 __all__ = [
     "start_command",
+    "menu_command",
     "help_command",
     "services_command",
     "batch_command",

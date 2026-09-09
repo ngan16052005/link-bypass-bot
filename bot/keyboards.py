@@ -53,22 +53,51 @@ def get_traffic_key_keyboard(url: str) -> InlineKeyboardMarkup:
 def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """
     Tạo bàn phím menu cố định dưới thanh nhập tin nhắn Telegram.
-    Tự động phân quyền: Admin thấy nút Thống kê, người dùng thấy nút Hỗ trợ/Báo lỗi.
+    Gọn gàng, chuẩn UI mobile, không bị tràn viền.
     """
     if is_admin:
         keyboard = [
-            [KeyboardButton("📖 Hướng Dẫn Vượt Link"), KeyboardButton("🔑 Cách Lấy Mã 60s")],
-            [KeyboardButton("📁 Vượt Link File .txt"), KeyboardButton("🌐 Dịch Vụ Hỗ Trợ")],
+            [KeyboardButton("⚡ Vượt Link"), KeyboardButton("🔑 Lấy Mã 60s")],
+            [KeyboardButton("📁 Vượt File .txt"), KeyboardButton("🌐 Dịch Vụ")],
             [KeyboardButton("📊 Thống Kê (Admin)"), KeyboardButton("🆔 ID Của Tôi")]
         ]
     else:
         keyboard = [
-            [KeyboardButton("📖 Hướng Dẫn Vượt Link"), KeyboardButton("🔑 Cách Lấy Mã 60s")],
-            [KeyboardButton("📁 Vượt Link File .txt"), KeyboardButton("🌐 Dịch Vụ Hỗ Trợ")],
-            [KeyboardButton("📢 Hỗ Trợ / Báo Lỗi"), KeyboardButton("🆔 ID Của Tôi")]
+            [KeyboardButton("⚡ Vượt Link"), KeyboardButton("🔑 Lấy Mã 60s")],
+            [KeyboardButton("📁 Vượt File .txt"), KeyboardButton("🌐 Dịch Vụ")],
+            [KeyboardButton("📢 Hỗ Trợ"), KeyboardButton("🆔 ID Của Tôi")]
         ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
+def get_dashboard_inline_keyboard(is_admin: bool = False) -> InlineKeyboardMarkup:
+    """
+    Bảng điều khiển tương tác trực tiếp (Inline Interactive Dashboard).
+    Chuyển trang ngay tại chỗ mà không làm trôi tin nhắn chat.
+    """
+    keyboard = [
+        [
+            InlineKeyboardButton("📖 Hướng Dẫn", callback_data="dash:help"),
+            InlineKeyboardButton("🔑 Lấy Mã 60s", callback_data="dash:key")
+        ],
+        [
+            InlineKeyboardButton("📁 Vượt File .txt", callback_data="dash:batch"),
+            InlineKeyboardButton("🌐 Dịch Vụ", callback_data="dash:services")
+        ],
+        [
+            InlineKeyboardButton("📢 Báo Lỗi", callback_data="dash:report_info"),
+            InlineKeyboardButton("🆔 ID Của Tôi", callback_data="dash:myid")
+        ]
+    ]
+    if is_admin:
+        keyboard.append([
+            InlineKeyboardButton("📊 Bảng Thống Kê Hệ Thống", callback_data="dash:stats")
+        ])
+    return InlineKeyboardMarkup(keyboard)
 
-
-
+def get_back_to_menu_keyboard() -> InlineKeyboardMarkup:
+    """
+    Nút quay lại menu điều khiển chính.
+    """
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔙 Quay Lại Bảng Điều Khiển", callback_data="dash:menu")]
+    ])
