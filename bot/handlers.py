@@ -28,19 +28,44 @@ TASK_SHORTENER_DOMAINS = [
 
 WELCOME_MESSAGE = (
     "👋 <b>Chào mừng bạn đến với Bot Vượt Link & Tự Động Lấy Key Siêu Tốc!</b>\n\n"
-    "🚀 <b>2 Tính năng chính:</b>\n"
-    "1️⃣ <b>Vượt link rút gọn:</b> Gửi link <code>bit.ly</code>, <code>tinyurl</code>, <code>linkx</code>, <code>linkvertise</code>... để lấy link gốc.\n"
-    "2️⃣ <b>Tự động lấy Key/Mã 60s:</b> Gõ <code>/key [link_bài_viết]</code> (ví dụ: <code>tabare.com.co</code>) -> Bot tự mở trình duyệt ngầm, cuộn trang, chờ 60s và lấy mã cho bạn!\n\n"
-    "👉 <i>Hãy thử gửi 1 link ngay bây giờ nhé!</i>"
+    "🚀 <b>Các tính năng nổi bật:</b>\n"
+    "1️⃣ <b>Vượt link rút gọn:</b> Hỗ trợ <code>Ouo.io</code>, <code>Link1s</code>, <code>MegaURL</code>, <code>Linkvertise</code>, <code>Bitly</code>, <code>TinyURL</code>, <code>Sub2Unlock</code>, Google Drive, Mediafire...\n"
+    "2️⃣ <b>Tự động lấy Key/Mã 60s:</b> Gõ <code>/key [link_bài_viết]</code> hoặc dán link bài viết -> Bot tự mở trình duyệt ngầm, cuộn trang, chờ 60s và lấy mã cho bạn!\n"
+    "3️⃣ <b>Xem danh sách dịch vụ:</b> Bấm nút <b>[🌐 Dịch Vụ Hỗ Trợ]</b> để xem toàn bộ danh sách.\n\n"
+    "👉 <i>Hãy dán ngay 1 đường link vào đây để trải nghiệm nhé!</i>"
 )
 
 HELP_MESSAGE = (
-    "📖 <b>HƯỚNG DẪN CHI TIẾT:</b>\n\n"
-    "🔹 <b>Vượt link rút gọn:</b> Dán link rút gọn vào chat -> Nhận link gốc trực tiếp.\n"
-    "🔹 <b>Tự động lấy Mã / Key 60 giây:</b> Gõ <code>/key [link_bài_viết]</code>\n"
+    "📖 <b>HƯỚNG DẪN SỬ DỤNG CHI TIẾT:</b>\n\n"
+    "🔹 <b>Vượt link rút gọn:</b> Dán bất kỳ link rút gọn nào vào chat -> Nhận link gốc trực tiếp.\n"
+    "🔹 <b>Tự động lấy Mã / Key 60 giây:</b> Dán link bài viết hoặc gõ <code>/key [link_bài_viết]</code>\n"
+    "🔹 <b>Xem danh sách link hỗ trợ:</b> Bấm <b>[🌐 Dịch Vụ Hỗ Trợ]</b> hoặc gõ <code>/services</code>\n"
     "🔹 <b>Xem ID Telegram của bạn:</b> Gõ <code>/myid</code>\n"
-    "🔹 <b>Thống kê hệ thống (Admin):</b> Gõ <code>/stats</code>"
+    "🔹 <b>Báo lỗi link hỏng:</b> Bấm nút <b>[📢 Báo Lỗi Cho Admin]</b> khi gặp link không vượt được."
 )
+
+SERVICES_MESSAGE = (
+    "🌐 <b>DANH SÁCH DỊCH VỤ & LIÊN KẾT HỖ TRỢ:</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "💰 <b>Trang Rút Gọn Kiếm Tiền:</b>\n"
+    "• <b>Ouo:</b> <code>ouo.io</code>, <code>ouo.press</code>\n"
+    "• <b>AdLinkFly:</b> <code>link1s</code>, <code>linkx</code>, <code>megaurl</code>, <code>droplink</code>, <code>shrtfly</code>...\n"
+    "• <b>Quốc tế:</b> <code>linkvertise.com</code>, <code>work.ink</code>, <code>adfly</code>...\n"
+    "• <b>Sub Kênh:</b> <code>sub2unlock.com</code>, <code>sub4unlock.com</code>...\n\n"
+    "⚡ <b>Rút Gọn Redirect Siêu Tốc:</b>\n"
+    "• <code>bit.ly</code>, <code>tinyurl.com</code>, <code>cutt.ly</code>, <code>shorturl.at</code>, <code>is.gd</code>...\n"
+    "• <b>SafeLink / Query:</b> Tự động giải mã link giấu trong Base64, Hex (<code>?url=</code>, <code>?dest=</code>, <code>?target=</code>...)\n"
+    "• <b>Chuyển hướng ngầm:</b> Meta Refresh & JavaScript Redirects\n\n"
+    "📁 <b>Tải File Trực Tiếp:</b>\n"
+    "• <b>Google Drive:</b> Tự động tạo link tải trực tiếp\n"
+    "• <b>Mediafire:</b> Bóc tách direct link tải nhanh không quảng cáo\n"
+    "• <b>Pastebin:</b> Trích xuất nội dung raw / link đích\n\n"
+    "🔑 <b>Tự Động Lấy Key Đếm Ngược 60s:</b>\n"
+    "• Mạng lưới: <code>layma.net</code>, <code>traffic123</code>, <code>tabare</code> và các bài viết Google yêu cầu chờ 60s lấy mã.\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "👉 <i>Chỉ cần copy và dán bất kỳ link nào vào chat để Bot tự động xử lý!</i>"
+)
+
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -63,6 +88,18 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_menu_keyboard(is_admin)
     )
+
+async def services_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user:
+        log_user(user.id, user.username, user.first_name)
+    is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+    await update.message.reply_text(
+        SERVICES_MESSAGE,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_menu_keyboard(is_admin)
+    )
+
 
 async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -261,6 +298,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clean_text = text.strip()
     if clean_text == "📖 Hướng Dẫn Vượt Link":
         await help_command(update, context)
+        return
+    elif clean_text == "🌐 Dịch Vụ Hỗ Trợ":
+        await services_command(update, context)
         return
     elif clean_text == "🔑 Cách Lấy Mã 60s":
         msg = (
