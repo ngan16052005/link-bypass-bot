@@ -68,13 +68,13 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     if is_admin:
         keyboard = [
             [KeyboardButton("⚡ Vượt Link"), KeyboardButton("🔑 Lấy Mã 60s")],
-            [KeyboardButton("📁 Vượt File .txt"), KeyboardButton("🌐 Dịch Vụ")],
+            [KeyboardButton("📁 Vượt File .txt"), KeyboardButton("🎁 Mời Bạn (VIP)")],
             [KeyboardButton("📊 Thống Kê (Admin)"), KeyboardButton("🆔 ID Của Tôi")]
         ]
     else:
         keyboard = [
             [KeyboardButton("⚡ Vượt Link"), KeyboardButton("🔑 Lấy Mã 60s")],
-            [KeyboardButton("📁 Vượt File .txt"), KeyboardButton("🌐 Dịch Vụ")],
+            [KeyboardButton("📁 Vượt File .txt"), KeyboardButton("🎁 Mời Bạn (VIP)")],
             [KeyboardButton("📋 Lịch Sử"), KeyboardButton("🆔 ID Của Tôi")]
         ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
@@ -98,6 +98,7 @@ def get_dashboard_inline_keyboard(is_admin: bool = False) -> InlineKeyboardMarku
             InlineKeyboardButton("🆔 ID & Hạn Mức", callback_data="dash:myid")
         ],
         [
+            InlineKeyboardButton("🎁 Mời Bạn - Nhận VIP", callback_data="dash:ref"),
             InlineKeyboardButton("📢 Báo Lỗi Cho Admin", callback_data="dash:report_info")
         ]
     ]
@@ -107,6 +108,16 @@ def get_dashboard_inline_keyboard(is_admin: bool = False) -> InlineKeyboardMarku
             InlineKeyboardButton("📋 Báo Cáo Lỗi", callback_data="dash:admin_reports")
         ])
     return InlineKeyboardMarkup(keyboard)
+
+def get_referral_keyboard(user_id: int) -> InlineKeyboardMarkup:
+    """Bàn phím chia sẻ link mời bạn bè 1-Click Share Telegram."""
+    ref_link = f"https://t.me/N1_link_bot?start=ref_{user_id}"
+    share_text = "⚡ Bot vượt link rút gọn siêu tốc & tự động lấy key 60s miễn phí! Bấm vào để trải nghiệm ngay:"
+    share_url = f"https://t.me/share/url?url={ref_link}&text={share_text}"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🚀 Chia Sẻ Ngay Cho Bạn Bè (1-Click)", url=share_url)],
+        [InlineKeyboardButton("🔙 Quay Lại Bảng Điều Khiển", callback_data="dash:menu")]
+    ])
 
 def get_back_to_menu_keyboard() -> InlineKeyboardMarkup:
     """

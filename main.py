@@ -37,6 +37,7 @@ from bot.handlers import (
     clear_reports_command,
     claimadmin_command,
     history_command,
+    ref_command,
     setvip_command,
     removevip_command,
     setchannel_command,
@@ -127,6 +128,7 @@ async def post_init(application) -> None:
         BotCommand("services", "🌐 Danh sách dịch vụ hỗ trợ"),
         BotCommand("key", "🔑 Lấy mã / key 60s từ link"),
         BotCommand("history", "📋 Xem lịch sử vượt link cá nhân"),
+        BotCommand("ref", "🎁 Mời bạn bè nhận VIP miễn phí"),
         BotCommand("myid", "🆔 Xem ID & Hạn mức của bạn"),
     ]
 
@@ -174,6 +176,7 @@ def main():
     app.add_handler(CommandHandler("services", services_command))
     app.add_handler(CommandHandler("batch", batch_command))
     app.add_handler(CommandHandler("history", history_command))
+    app.add_handler(CommandHandler(["ref", "invite"], ref_command))
     app.add_handler(CommandHandler("myid", myid_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))

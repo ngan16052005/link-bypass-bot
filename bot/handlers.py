@@ -35,7 +35,9 @@ from core.database import (
     get_user_history,
     get_channel_fsub,
     set_channel_fsub,
-    toggle_channel_fsub
+    toggle_channel_fsub,
+    process_referral,
+    get_referral_stats
 )
 from core.link_enricher import clean_url, fetch_file_metadata
 from .utils import extract_urls
@@ -46,7 +48,8 @@ from .keyboards import (
     get_main_menu_keyboard,
     get_dashboard_inline_keyboard,
     get_back_to_menu_keyboard,
-    get_fsub_keyboard
+    get_fsub_keyboard,
+    get_referral_keyboard
 )
 from .anti_spam import check_rate_limit
 
@@ -145,6 +148,41 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         log_user(user.id, user.username, user.first_name)
     is_admin = is_admin_user(user.id if user else None)
     name = user.first_name if user and user.first_name else "bạn"
+
+    # Xử lý link giới thiệu bạn bè (Deep Linking ?start=ref_123456789)
+    if context.args and len(context.args) > 0:
+        arg = context.args[0].strip()
+        if arg.startswith("ref_") and user:
+            try:
+                referrer_id = int(arg[4:])
+                res = process_referral(referrer_id, user.id)
+                if res["success"]:
+                    total_m = res["total_refs"]
+                    alert_txt = (
+                        f"🎉 <b>BẠN BÈ VỪA THAM GIA QUA LINK CỦA BẠN!</b>\n"
+                        f"━━━━━━━━━━━━━━━━━━━━\n"
+                        f"👤 Người bạn: <b>{html.escape(user.full_name or 'Một người bạn')}</b> (@{user.username or 'Không có'})\n"
+                        f"📊 Tổng số bạn bè bạn đã mời: <b>{total_m} người</b>\n"
+                    )
+                    if res["awarded_vip"]:
+                        alert_txt += (
+                            f"\n🎁 <b>CHÚC MỪNG BẠN ĐẠT MỐC THƯỞNG!</b>\n"
+                            f"👑 Bạn vừa được cộng thêm <b>{res['days_awarded']} ngày VIP Member</b> vào tài khoản!"
+                        )
+                    else:
+                        stats = get_referral_stats(referrer_id)
+                        alert_txt += f"💡 Mời thêm <b>{stats['needed']} người nữa</b> để nhận ngay <b>{stats['reward_days']} ngày VIP</b>!"
+
+                    try:
+                        await context.bot.send_message(
+                            chat_id=referrer_id,
+                            text=alert_txt,
+                            parse_mode=ParseMode.HTML
+                        )
+                    except Exception:
+                        pass
+            except Exception as e:
+                print(f"[Ref] Error handling referral start: {e}")
 
     # Mở bàn phím menu cố định và gửi bảng điều khiển Interactive Dashboard
     await update.message.reply_text(
@@ -428,6 +466,42 @@ async def claimadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"• <code>/togglefsub</code> - Bật/Tắt bắt buộc tham gia kênh\n"
         f"• Tự động nhận tin nhắn cảnh báo tức thì mỗi khi có người báo lỗi link!",
         parse_mode=ParseMode.HTML
+    )
+
+async def ref_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lệnh xem link giới thiệu bạn bè và nhận VIP miễn phí."""
+    user = update.effective_user
+    if not user:
+        return
+    log_user(user.id, user.username, user.first_name)
+    stats = get_referral_stats(user.id)
+    ref_link = f"https://t.me/N1_link_bot?start=ref_{user.id}"
+
+    msg = (
+        "🎁 <b>CHƯƠNG TRÌNH MỜI BẠN BÈ - NHẬN VIP MIỄN PHÍ</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "Chia sẻ đường link độc quyền của bạn cho bạn bè, hội nhóm công nghệ. Càng mời nhiều, thời hạn VIP càng khủng!\n\n"
+        "🔗 <b>Link giới thiệu của bạn:</b>\n"
+        f"👉 <code>{ref_link}</code> 👈\n"
+        "<i>(Chạm vào link để tự động sao chép)</i>\n\n"
+        "📊 <b>Tiến trình của bạn:</b>\n"
+        f"• Đã mời thành công: <b>{stats['total_refs']} người</b>\n"
+        f"• Mốc tiếp theo: <b>{stats['target']} người</b> (🎁 Nhận <b>{stats['reward_days']} ngày VIP</b>)\n"
+        f"• Cần mời thêm: <b>{stats['needed']} người nữa</b>\n\n"
+        "🏆 <b>BẢNG MỐC THƯỞNG VIP:</b>\n"
+        "• Mời <b>3 bạn</b> ➔ Tặng <b>3 ngày VIP</b>\n"
+        "• Mời <b>5 bạn</b> ➔ Tặng <b>5 ngày VIP</b>\n"
+        "• Mời <b>10 bạn</b> ➔ Tặng <b>15 ngày VIP</b>\n"
+        "• Mời <b>20 bạn</b> ➔ Tặng <b>30 ngày VIP (1 tháng)</b>\n"
+        "• Mỗi 10 bạn tiếp theo ➔ Tặng thêm <b>30 ngày VIP</b>!\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+        "💡 <i>Bấm nút bên dưới để chia sẻ 1-Click ngay cho bạn bè trên Telegram!</i>"
+    )
+    await update.message.reply_text(
+        msg,
+        parse_mode=ParseMode.HTML,
+        disable_web_page_preview=True,
+        reply_markup=get_referral_keyboard(user.id)
     )
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -769,6 +843,33 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_back_to_menu_keyboard()
             )
+        elif action == "ref":
+            stats = get_referral_stats(user.id if user else 0)
+            ref_link = f"https://t.me/N1_link_bot?start=ref_{user.id if user else 0}"
+            msg = (
+                "🎁 <b>CHƯƠNG TRÌNH MỜI BẠN BÈ - NHẬN VIP MIỄN PHÍ</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "Chia sẻ đường link riêng của bạn cho bạn bè, hội nhóm. Càng mời nhiều, thời hạn VIP càng khủng!\n\n"
+                "🔗 <b>Link giới thiệu của bạn:</b>\n"
+                f"👉 <code>{ref_link}</code> 👈\n\n"
+                "📊 <b>Tiến trình của bạn:</b>\n"
+                f"• Đã mời thành công: <b>{stats['total_refs']} người</b>\n"
+                f"• Mốc tiếp theo: <b>{stats['target']} người</b> (🎁 Nhận <b>{stats['reward_days']} ngày VIP</b>)\n"
+                f"• Cần mời thêm: <b>{stats['needed']} người nữa</b>\n\n"
+                "🏆 <b>MỐC THƯỞNG VIP:</b>\n"
+                "• Mời 3 bạn ➔ Tặng 3 ngày VIP\n"
+                "• Mời 5 bạn ➔ Tặng 5 ngày VIP\n"
+                "• Mời 10 bạn ➔ Tặng 15 ngày VIP\n"
+                "• Mời 20 bạn ➔ Tặng 30 ngày VIP (1 tháng)\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "💡 <i>Bấm nút bên dưới để chia sẻ 1-Click ngay cho bạn bè!</i>"
+            )
+            await query.edit_message_text(
+                msg,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+                reply_markup=get_referral_keyboard(user.id if user else 0)
+            )
         elif action == "stats":
             if not is_admin:
                 await query.answer("⛔ Mục này chỉ dành riêng cho Admin quản trị Bot!", show_alert=True)
@@ -985,6 +1086,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         elif clean_text in ["📋 Lịch Sử", "📋 Lịch Sử Vượt", "📋 Lịch Sử Vượt Link"]:
             await history_command(update, context)
+            return
+        elif clean_text in ["🎁 Mời Bạn (VIP)", "🎁 Mời Bạn Bè", "🎁 Mời Bạn - Nhận VIP"]:
+            await ref_command(update, context)
             return
         elif clean_text in ["📊 Thống Kê (Admin)", "📊 Thống Kê"]:
             await stats_command(update, context)

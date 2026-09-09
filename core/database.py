@@ -80,6 +80,16 @@ def init_db():
             today_count INTEGER DEFAULT 0
         )
         """)
+        # Bảng hệ thống giới thiệu bạn bè (Referral Viral System)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS referrals (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            referrer_id INTEGER,
+            referred_id INTEGER UNIQUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)")
         # Đảm bảo bảng link_history có cột result_url
         try:
             cursor.execute("ALTER TABLE link_history ADD COLUMN result_url TEXT")
@@ -540,6 +550,108 @@ def toggle_channel_fsub() -> bool:
     new_state = not enabled
     set_setting("fsub_enabled", "1" if new_state else "0")
     return new_state
+
+def process_referral(referrer_id: int, referred_id: int) -> dict:
+    """
+    Ghi nhận một lượt giới thiệu mới và tính toán thưởng VIP.
+    Trả về dict chứa thông tin chi tiết.
+    """
+    if referrer_id == referred_id:
+        return {"success": False, "reason": "self_referral"}
+
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            
+            # Kiểm tra xem người được giới thiệu đã từng tồn tại trong hệ thống chưa
+            cursor.execute("SELECT id FROM referrals WHERE referred_id = ?", (referred_id,))
+            if cursor.fetchone():
+                return {"success": False, "reason": "already_referred"}
+
+            # Ghi nhận lượt giới thiệu
+            cursor.execute("""
+            INSERT INTO referrals (referrer_id, referred_id)
+            VALUES (?, ?)
+            """, (referrer_id, referred_id))
+            conn.commit()
+
+            # Tính tổng số người đã mời của referrer
+            cursor.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (referrer_id,))
+            total_refs = cursor.fetchone()[0]
+
+            # Kiểm tra mốc thưởng VIP tự động:
+            # Mốc 3: 3 ngày
+            # Mốc 5: 5 ngày
+            # Mốc 10: 15 ngày
+            # Mốc 20: 30 ngày
+            # Mỗi 10 người tiếp theo (30, 40, 50...): 30 ngày
+            awarded = False
+            days = 0
+
+            if total_refs == 3:
+                awarded = True
+                days = 3
+            elif total_refs == 5:
+                awarded = True
+                days = 5
+            elif total_refs == 10:
+                awarded = True
+                days = 15
+            elif total_refs == 20:
+                awarded = True
+                days = 30
+            elif total_refs > 20 and total_refs % 10 == 0:
+                awarded = True
+                days = 30
+
+            if awarded and days > 0:
+                set_user_vip(referrer_id, days)
+
+            return {
+                "success": True,
+                "total_refs": total_refs,
+                "awarded_vip": awarded,
+                "days_awarded": days
+            }
+    except Exception as e:
+        print(f"[DB] process_referral error: {e}")
+        return {"success": False, "reason": "error"}
+
+def get_referral_stats(user_id: int) -> dict:
+    """Lấy thống kê mời bạn bè của người dùng."""
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (user_id,))
+            row = cursor.fetchone()
+            total_refs = row[0] if row else 0
+
+            if total_refs < 3:
+                target = 3
+                reward = 3
+            elif total_refs < 5:
+                target = 5
+                reward = 5
+            elif total_refs < 10:
+                target = 10
+                reward = 15
+            elif total_refs < 20:
+                target = 20
+                reward = 30
+            else:
+                target = ((total_refs // 10) + 1) * 10
+                reward = 30
+
+            needed = max(0, target - total_refs)
+            return {
+                "total_refs": total_refs,
+                "target": target,
+                "reward_days": reward,
+                "needed": needed
+            }
+    except Exception as e:
+        print(f"[DB] get_referral_stats error: {e}")
+        return {"total_refs": 0, "target": 3, "reward_days": 3, "needed": 3}
 
 # Khởi tạo DB khi load module
 init_db()
