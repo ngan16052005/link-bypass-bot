@@ -13,6 +13,15 @@ BLOCKED_EXTENSIONS = {
     ".mp4", ".webm", ".ogg", ".mp3", ".wav"
 }
 
+# Các từ khóa JS/HTML bị loại trừ để tránh nhận diện nhầm mã
+EXCLUDED_KEYWORDS = {
+    "string", "none", "null", "undefined", "window", "document", "location",
+    "true", "false", "function", "object", "return", "const", "var", "let",
+    "button", "action", "submit", "center", "middle", "inline", "block",
+    "header", "footer", "content", "script", "style", "length", "value"
+}
+
+
 def make_progress_bar(current: int, total: int = 60, length: int = 10) -> str:
     """Tạo thanh tiến trình trực quan [██████░░░░]"""
     percent = min(1.0, max(0.0, current / total))
@@ -164,13 +173,26 @@ async def grab_traffic_key(
                     if captured_key["code"]:
                         return True, captured_key["code"], "Đã nhận mã từ hệ thống thành công!"
 
-                    # Quét DOM
+                    # Quét DOM (chỉ quét text hiển thị, loại bỏ thẻ script/style ngầm)
                     try:
-                        content = await page.content()
-                        match = re.search(r'(?:Mã|Code|Key)(?:\s*của\s*bạn)?\s*[:=]\s*([A-Za-z0-9]{4,12})', content, re.IGNORECASE)
+                        # 1. Kiểm tra các phần tử hiển thị mã phổ biến
+                        for code_sel in ['#traffic_code', '#show_code', '#code_output', '.layma-code', '[id*="traffic"]', '[id*="layma"]']:
+                            try:
+                                el = page.locator(code_sel).first
+                                if await el.is_visible(timeout=150):
+                                    val = (await el.text_content() or "").strip()
+                                    clean_val = re.sub(r'[^A-Za-z0-9]', '', val)
+                                    if len(clean_val) >= 4 and clean_val.lower() not in EXCLUDED_KEYWORDS:
+                                        return True, clean_val, "Đã đọc được mã từ phần tử trên trang!"
+                            except Exception:
+                                pass
+
+                        # 2. Quét text hiển thị trên trang bằng innerText (không quét script)
+                        text_content = await page.evaluate("() => document.body ? document.body.innerText : ''")
+                        match = re.search(r'(?:Mã|Code|Key)(?:\s*của\s*bạn)?\s*[:=]\s*([A-Za-z0-9]{4,12})', text_content, re.IGNORECASE)
                         if match:
                             code_found = match.group(1).strip()
-                            if code_found.lower() not in ["string", "none", "null", "undefined"]:
+                            if code_found.lower() not in EXCLUDED_KEYWORDS:
                                 return True, code_found, "Đã đọc được mã hiển thị trên trang!"
 
                         # Thử click nút nhận mã nếu chuyển trạng thái
@@ -183,6 +205,7 @@ async def grab_traffic_key(
                                 pass
                     except Exception:
                         pass
+
 
                     # Cập nhật thanh tiến trình mỗi 6 giây
                     if status_callback and waited > 0 and waited % 6 == 0:
