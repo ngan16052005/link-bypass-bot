@@ -36,6 +36,11 @@ from bot.handlers import (
     reports_command,
     clear_reports_command,
     claimadmin_command,
+    history_command,
+    setvip_command,
+    removevip_command,
+    setchannel_command,
+    togglefsub_command,
     key_command,
     callback_router,
     handle_message,
@@ -121,7 +126,8 @@ async def post_init(application) -> None:
         BotCommand("batch", "📁 Vượt link hàng loạt bằng file .txt"),
         BotCommand("services", "🌐 Danh sách dịch vụ hỗ trợ"),
         BotCommand("key", "🔑 Lấy mã / key 60s từ link"),
-        BotCommand("myid", "🆔 Xem ID Telegram của bạn"),
+        BotCommand("history", "📋 Xem lịch sử vượt link cá nhân"),
+        BotCommand("myid", "🆔 Xem ID & Hạn mức của bạn"),
     ]
 
 
@@ -167,12 +173,17 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("services", services_command))
     app.add_handler(CommandHandler("batch", batch_command))
+    app.add_handler(CommandHandler("history", history_command))
     app.add_handler(CommandHandler("myid", myid_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
     app.add_handler(CommandHandler("reports", reports_command))
     app.add_handler(CommandHandler("clearreports", clear_reports_command))
     app.add_handler(CommandHandler("claimadmin", claimadmin_command))
+    app.add_handler(CommandHandler("setvip", setvip_command))
+    app.add_handler(CommandHandler("removevip", removevip_command))
+    app.add_handler(CommandHandler("setchannel", setchannel_command))
+    app.add_handler(CommandHandler("togglefsub", togglefsub_command))
     app.add_handler(CommandHandler("key", key_command))
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(InlineQueryHandler(inline_query_handler))

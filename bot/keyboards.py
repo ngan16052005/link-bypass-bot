@@ -23,11 +23,13 @@ def get_url_from_key(key: str) -> str | None:
 
 def get_result_keyboard(target_url: str) -> InlineKeyboardMarkup:
     """
-    Tạo bàn phím nút bấm mở nhanh link đích trên trình duyệt.
+    Tạo bàn phím nút bấm mở nhanh link đích trên trình duyệt và nút tạo mã QR Code.
     """
+    short_key = get_short_key(target_url)
     keyboard = [
         [
-            InlineKeyboardButton("🌐 Mở Link Đích Ngay", url=target_url)
+            InlineKeyboardButton("🌐 Mở Link Đích Ngay", url=target_url),
+            InlineKeyboardButton("📱 Tạo Mã QR", callback_data=f"qr:{short_key}")
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -50,6 +52,14 @@ def get_fail_keyboard(url: str, is_task_shortener: bool = False) -> InlineKeyboa
 def get_traffic_key_keyboard(url: str) -> InlineKeyboardMarkup:
     return get_fail_keyboard(url, is_task_shortener=False)
 
+def get_fsub_keyboard(channel_url: str) -> InlineKeyboardMarkup:
+    """Bàn phím bắt buộc tham gia kênh Telegram."""
+    keyboard = [
+        [InlineKeyboardButton("📢 Tham Gia Kênh Telegram", url=channel_url)],
+        [InlineKeyboardButton("✅ Tôi Đã Tham Gia Xong", callback_data="fsub:verify")]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     """
     Tạo bàn phím menu cố định dưới thanh nhập tin nhắn Telegram.
@@ -65,7 +75,7 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
         keyboard = [
             [KeyboardButton("⚡ Vượt Link"), KeyboardButton("🔑 Lấy Mã 60s")],
             [KeyboardButton("📁 Vượt File .txt"), KeyboardButton("🌐 Dịch Vụ")],
-            [KeyboardButton("📢 Hỗ Trợ"), KeyboardButton("🆔 ID Của Tôi")]
+            [KeyboardButton("📋 Lịch Sử"), KeyboardButton("🆔 ID Của Tôi")]
         ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
@@ -84,8 +94,11 @@ def get_dashboard_inline_keyboard(is_admin: bool = False) -> InlineKeyboardMarku
             InlineKeyboardButton("🌐 Dịch Vụ", callback_data="dash:services")
         ],
         [
-            InlineKeyboardButton("📢 Báo Lỗi", callback_data="dash:report_info"),
-            InlineKeyboardButton("🆔 ID Của Tôi", callback_data="dash:myid")
+            InlineKeyboardButton("📋 Lịch Sử Vượt", callback_data="dash:history"),
+            InlineKeyboardButton("🆔 ID & Hạn Mức", callback_data="dash:myid")
+        ],
+        [
+            InlineKeyboardButton("📢 Báo Lỗi Cho Admin", callback_data="dash:report_info")
         ]
     ]
     if is_admin:

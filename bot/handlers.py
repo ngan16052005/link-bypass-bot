@@ -4,7 +4,7 @@ import asyncio
 import html
 import hashlib
 import logging
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote
 from datetime import datetime, timezone, timedelta
 from telegram import (
     Update,
@@ -27,8 +27,17 @@ from core.database import (
     is_admin_user,
     get_all_user_ids,
     get_recent_reports,
-    clear_all_reports
+    clear_all_reports,
+    check_and_increment_quota,
+    set_user_vip,
+    remove_user_vip,
+    get_user_vip_info,
+    get_user_history,
+    get_channel_fsub,
+    set_channel_fsub,
+    toggle_channel_fsub
 )
+from core.link_enricher import clean_url, fetch_file_metadata
 from .utils import extract_urls
 from .keyboards import (
     get_result_keyboard,
@@ -36,12 +45,38 @@ from .keyboards import (
     get_url_from_key,
     get_main_menu_keyboard,
     get_dashboard_inline_keyboard,
-    get_back_to_menu_keyboard
+    get_back_to_menu_keyboard,
+    get_fsub_keyboard
 )
 from .anti_spam import check_rate_limit
 
 
 
+
+async def check_user_fsub(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> tuple[bool, str]:
+    """
+    Kiểm tra người dùng đã tham gia kênh bắt buộc hay chưa.
+    Trả về (is_subscribed: bool, channel_url: str).
+    """
+    if is_admin_user(user_id):
+        return True, ""
+
+    channel, enabled = get_channel_fsub()
+    if not enabled or not channel:
+        return True, ""
+
+    clean_chan = channel.strip()
+    channel_url = f"https://t.me/{clean_chan.lstrip('@')}"
+
+    try:
+        chat_member = await context.bot.get_chat_member(chat_id=clean_chan, user_id=user_id)
+        if chat_member.status in ["creator", "administrator", "member", "restricted"]:
+            return True, ""
+        return False, channel_url
+    except Exception as e:
+        # Nếu bot chưa được add quyền Admin trong kênh hoặc mạng lag, bỏ qua để không chặn nhầm người dùng
+        print(f"[FSub] Warning checking chat member {user_id} in {clean_chan}: {e}")
+        return True, ""
 
 ADMIN_ID = os.getenv("ADMIN_ID")
 
@@ -187,16 +222,28 @@ async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     log_user(user.id, user.username, user.first_name)
     is_admin = is_admin_user(user.id)
+    vip_info = get_user_vip_info(user.id)
 
-    status_str = "👑 <b>Trạng thái: Bạn là Admin chính thức của Bot!</b>" if is_admin else "👤 <b>Trạng thái: Người dùng thông thường</b>"
+    if is_admin:
+        rank_str = "👑 <b>Admin Quản Trị Tối Cao</b>"
+        quota_str = "♾️ Không giới hạn"
+    elif vip_info["is_vip"]:
+        until_disp = str(vip_info['vip_until'])[:10] if vip_info['vip_until'] else "Vô thời hạn"
+        rank_str = f"👑 <b>VIP Member</b> (Hạn dùng: <code>{until_disp}</code>)"
+        quota_str = "♾️ Không giới hạn"
+    else:
+        rank_str = "👤 <b>Thành Viên Miễn Phí</b>"
+        quota_str = f"<code>{vip_info['remaining_today']}/30</code> lượt vượt còn lại hôm nay"
+
     msg = (
-        f"🆔 <b>ID TELEGRAM CỦA BẠN:</b>\n"
-        f"👉 <code>{user.id}</code> 👈\n"
-        f"<i>(Chạm vào dãy số trên để tự động sao chép)</i>\n\n"
-        f"{status_str}\n\n"
-        f"💡 <b>Kích hoạt Admin:</b>\n"
-        f"• Nếu bot chưa có Admin, gõ <code>/claimadmin</code> để nhận quyền quản trị ngay!\n"
-        f"• Hoặc thêm biến môi trường <code>ADMIN_ID = {user.id}</code> trên Render."
+        f"🆔 <b>THÔNG TIN TÀI KHOẢN CỦA BẠN:</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"👤 <b>Tên:</b> {html.escape(user.full_name or '')}\n"
+        f"🔹 <b>Telegram ID:</b> <code>{user.id}</code>\n"
+        f"🎖️ <b>Cấp bậc:</b> {rank_str}\n"
+        f"📊 <b>Hạn mức:</b> {quota_str}\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"💡 <i>Chạm vào ID để tự động sao chép.</i>"
     )
     await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
 
@@ -376,7 +423,151 @@ async def claimadmin_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         f"• <code>/broadcast</code> - Phát thông báo toàn server\n"
         f"• <code>/reports</code> - Xem danh sách link lỗi người dùng báo\n"
         f"• <code>/stats</code> - Bảng thống kê hệ thống\n"
+        f"• <code>/setvip</code> - Cấp quyền VIP cho người dùng\n"
+        f"• <code>/setchannel</code> - Cài đặt kênh bắt buộc tham gia\n"
+        f"• <code>/togglefsub</code> - Bật/Tắt bắt buộc tham gia kênh\n"
         f"• Tự động nhận tin nhắn cảnh báo tức thì mỗi khi có người báo lỗi link!",
+        parse_mode=ParseMode.HTML
+    )
+
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xem danh sách 5 link đã vượt thành công gần nhất của người dùng."""
+    user = update.effective_user
+    if user:
+        log_user(user.id, user.username, user.first_name)
+    history = get_user_history(user.id if user else 0, limit=5)
+    if not history:
+        await update.message.reply_text(
+            "📋 <b>LỊCH SỬ VƯỢT LINK CỦA BẠN:</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "✨ <i>Bạn chưa có link nào được lưu trong lịch sử! Hãy gửi link vào đây để trải nghiệm nhé.</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    msg = (
+        "📋 <b>5 LINK VƯỢT THÀNH CÔNG GẦN NHẤT:</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━\n"
+    )
+    for idx, item in enumerate(history, 1):
+        msg += (
+            f"<b>{idx}. {item['created_at'][:16]}</b> (⚡ <i>{html.escape(item['engine'])}</i>):\n"
+            f"🔗 <b>Gốc:</b> <code>{html.escape(item['url'])}</code>\n"
+            f"🎯 <b>Đích:</b> <code>{html.escape(item['result_url'])}</code>\n\n"
+        )
+    msg += "💡 <i>Chạm vào đường link đích để sao chép hoặc mở nhanh!</i>"
+    await update.message.reply_text(msg, parse_mode=ParseMode.HTML, disable_web_page_preview=True)
+
+async def setvip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cấp hoặc gia hạn quyền VIP cho người dùng (Dành cho Admin)."""
+    user = update.effective_user
+    if not user or not is_admin_user(user.id):
+        await update.message.reply_text("⛔ Lệnh này chỉ dành riêng cho Admin quản trị Bot!")
+        return
+
+    if not context.args or len(context.args) < 2:
+        await update.message.reply_text(
+            "⚠️ <b>Cú pháp lệnh cấp VIP:</b>\n"
+            "<code>/setvip [user_id] [số_ngày]</code>\n"
+            "<i>Ví dụ: <code>/setvip 123456789 30</code> (cấp VIP 30 ngày)</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    try:
+        target_id = int(context.args[0].strip())
+        days = int(context.args[1].strip())
+        success = set_user_vip(target_id, days)
+        if success:
+            await update.message.reply_text(
+                f"👑 <b>CẤP QUYỀN VIP THÀNH CÔNG!</b>\n"
+                f"• Tài khoản ID: <code>{target_id}</code>\n"
+                f"• Thời hạn: <b>{days} ngày</b>\n"
+                f"• Quyền lợi: Vượt link không giới hạn, không bị bóp băng thông!",
+                parse_mode=ParseMode.HTML
+            )
+            try:
+                await context.bot.send_message(
+                    chat_id=target_id,
+                    text=f"🎉 <b>CHÚC MỪNG!</b>\nBạn vừa được Quản trị viên nâng cấp lên tài khoản 👑 <b>VIP Member ({days} ngày)</b>!\nBạn có thể vượt link không giới hạn từ bây giờ.",
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception:
+                pass
+        else:
+            await update.message.reply_text("❌ Không thể cấp VIP. Vui lòng kiểm tra lại ID!")
+    except ValueError:
+        await update.message.reply_text("❌ ID hoặc số ngày không hợp lệ. Vui lòng nhập số nguyên!")
+
+async def removevip_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Hủy quyền VIP của người dùng (Dành cho Admin)."""
+    user = update.effective_user
+    if not user or not is_admin_user(user.id):
+        await update.message.reply_text("⛔ Lệnh này chỉ dành riêng cho Admin quản trị Bot!")
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "⚠️ <b>Cú pháp lệnh hủy VIP:</b>\n"
+            "<code>/removevip [user_id]</code>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    try:
+        target_id = int(context.args[0].strip())
+        remove_user_vip(target_id)
+        await update.message.reply_text(f"🗑️ Đã hủy trạng thái VIP của tài khoản ID: <code>{target_id}</code>.", parse_mode=ParseMode.HTML)
+    except ValueError:
+        await update.message.reply_text("❌ ID không hợp lệ!")
+
+async def setchannel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cài đặt Kênh Telegram bắt buộc người dùng tham gia (Dành cho Admin)."""
+    user = update.effective_user
+    if not user or not is_admin_user(user.id):
+        await update.message.reply_text("⛔ Lệnh này chỉ dành riêng cho Admin quản trị Bot!")
+        return
+
+    if not context.args:
+        curr_chan, is_en = get_channel_fsub()
+        status_txt = "🟢 ĐANG BẬT" if is_en else "🔴 ĐANG TẮT"
+        await update.message.reply_text(
+            f"📢 <b>CẤU HÌNH KÊNH BẮT BUỘC THAM GIA:</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"• Kênh hiện tại: <code>{curr_chan or 'Chưa cài đặt'}</code>\n"
+            f"• Trạng thái: <b>{status_txt}</b>\n\n"
+            f"👉 <b>Cú pháp đổi kênh:</b> <code>/setchannel @ten_kenh_cua_ban</code>\n"
+            f"👉 <b>Bật/Tắt chế độ:</b> <code>/togglefsub</code>\n\n"
+            f"⚠️ <i>Lưu ý: Bạn phải thêm Bot làm Quản trị viên (Admin) của Kênh đó thì Bot mới kiểm tra được thành viên!</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    new_channel = context.args[0].strip()
+    if not new_channel.startswith("@") and not new_channel.startswith("-100"):
+        new_channel = f"@{new_channel}"
+    set_channel_fsub(new_channel, enabled=True)
+    await update.message.reply_text(
+        f"✅ <b>ĐÃ CÀI ĐẶT KÊNH THÀNH CÔNG!</b>\n"
+        f"• Kênh bắt buộc: <code>{new_channel}</code>\n"
+        f"• Trạng thái: <b>🟢 ĐÃ BẬT</b>\n\n"
+        f"💡 <i>Nhớ thêm @N1_link_bot làm Quản trị viên trong kênh {new_channel} nhé!</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+async def togglefsub_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Bật / Tắt nhanh chế độ bắt buộc tham gia kênh (Dành cho Admin)."""
+    user = update.effective_user
+    if not user or not is_admin_user(user.id):
+        await update.message.reply_text("⛔ Lệnh này chỉ dành riêng cho Admin quản trị Bot!")
+        return
+
+    new_state = toggle_channel_fsub()
+    curr_chan, _ = get_channel_fsub()
+    await update.message.reply_text(
+        f"📢 <b>CHẾ ĐỘ BẮT BUỘC THAM GIA KÊNH:</b>\n"
+        f"• Kênh: <code>{curr_chan or 'Chưa cài đặt'}</code>\n"
+        f"• Trạng thái mới: <b>{'🟢 ĐÃ BẬT' if new_state else '🔴 ĐÃ TẮT'}</b>",
         parse_mode=ParseMode.HTML
     )
 
@@ -507,11 +698,57 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML,
                 reply_markup=get_back_to_menu_keyboard()
             )
+        elif action == "history":
+            history = get_user_history(user.id if user else 0, limit=5)
+            if not history:
+                hist_text = (
+                    "📋 <b>LỊCH SỬ VƯỢT LINK CỦA BẠN</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                    "✨ <i>Bạn chưa vượt link nào gần đây! Hãy gửi link vào đây để trải nghiệm nhé.</i>"
+                )
+            else:
+                hist_text = (
+                    "📋 <b>5 LINK VƯỢT THÀNH CÔNG GẦN NHẤT:</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n"
+                )
+                for idx, item in enumerate(history, 1):
+                    hist_text += (
+                        f"<b>{idx}. {item['created_at'][:16]}</b> (⚡ <i>{html.escape(item['engine'])}</i>):\n"
+                        f"🔗 <b>Gốc:</b> <code>{html.escape(item['url'])}</code>\n"
+                        f"🎯 <b>Đích:</b> <code>{html.escape(item['result_url'])}</code>\n\n"
+                    )
+            keyboard = [
+                [InlineKeyboardButton("🔄 Làm Mới", callback_data="dash:history")],
+                [InlineKeyboardButton("◀️ Quay Lại Menu", callback_data="dash:back")]
+            ]
+            await query.edit_message_text(
+                hist_text,
+                parse_mode=ParseMode.HTML,
+                disable_web_page_preview=True,
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
         elif action == "myid":
+            vip_info = get_user_vip_info(user.id if user else 0)
+            if is_admin:
+                rank_str = "👑 Admin Quản Trị Tối Cao"
+                quota_str = "♾️ Không giới hạn"
+            elif vip_info["is_vip"]:
+                until_disp = str(vip_info['vip_until'])[:10] if vip_info['vip_until'] else "Vô thời hạn"
+                rank_str = f"👑 VIP Member (Đến: {until_disp})"
+                quota_str = "♾️ Không giới hạn"
+            else:
+                rank_str = "👤 Thành Viên Miễn Phí"
+                quota_str = f"{vip_info['remaining_today']}/30 lượt còn lại hôm nay"
+
             myid_text = (
-                f"🆔 <b>ID TELEGRAM CỦA BẠN:</b>\n"
-                f"👉 <code>{user.id}</code> 👈\n"
-                f"<i>(Chạm vào dãy số trên để tự động sao chép)</i>"
+                f"🆔 <b>THÔNG TIN TÀI KHOẢN CỦA BẠN:</b>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"👤 <b>Tên:</b> {html.escape(user.full_name or '')}\n"
+                f"🔹 <b>Telegram ID:</b> <code>{user.id}</code>\n"
+                f"🎖️ <b>Cấp bậc:</b> <b>{rank_str}</b>\n"
+                f"📊 <b>Hạn mức:</b> <code>{quota_str}</code>\n"
+                f"━━━━━━━━━━━━━━━━━━━━\n"
+                f"💡 <i>Chạm vào ID để tự động sao chép.</i>"
             )
             await query.edit_message_text(
                 myid_text,
@@ -618,6 +855,46 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await do_grab_key(status_msg, url, user.id if user else 0)
 
+    # Xử lý nút Tạo Mã QR
+    elif data.startswith("qr:"):
+        short_key = data[3:]
+        url = get_url_from_key(short_key) or short_key
+        quoted_url = quote(url, safe="")
+        qr_img_url = f"https://api.qrserver.com/v1/create-qr-code/?size=350x350&data={quoted_url}"
+        try:
+            await query.answer("📱 Đang tạo ảnh mã QR...")
+            await context.bot.send_photo(
+                chat_id=query.message.chat_id,
+                photo=qr_img_url,
+                caption=(
+                    f"📱 <b>MÃ QR CODE CHO ĐƯỜNG LINK ĐÍCH:</b>\n"
+                    f"━━━━━━━━━━━━━━━━━━━━\n"
+                    f"🔗 <code>{html.escape(url)}</code>\n\n"
+                    f"👉 <i>Hãy mở camera điện thoại hoặc app Zalo / Google Lens để quét truy cập ngay nhé!</i>"
+                ),
+                parse_mode=ParseMode.HTML
+            )
+        except Exception as e:
+            print(f"[QR] Error sending QR code: {e}")
+            await query.message.reply_text(f"⚠️ Không thể tạo ảnh QR: {e}")
+
+    # Xử lý xác minh tham gia Kênh Telegram (Force Subscribe)
+    elif data == "fsub:verify":
+        is_sub, _ = await check_user_fsub(user.id if user else 0, context)
+        if is_sub:
+            await query.answer("🎉 Chúc mừng! Bạn đã tham gia kênh thành công.", show_alert=True)
+            try:
+                await query.message.delete()
+            except Exception:
+                pass
+            await context.bot.send_message(
+                chat_id=user.id if user else 0,
+                text="✅ <b>XÁC THỰC THÀNH CÔNG!</b>\nBạn đã mở khóa toàn bộ tính năng. Hãy dán bất kỳ link nào vào đây để bắt đầu vượt nhé!",
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            await query.answer("⚠️ Bạn vẫn chưa tham gia kênh! Vui lòng bấm vào nút 'Tham Gia Kênh Telegram' phía trên trước nhé.", show_alert=True)
+
     # Xử lý nút Báo lỗi link cho Admin
     elif data.startswith("report:"):
         short_key = data[7:]
@@ -663,8 +940,12 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
+    chat = update.effective_chat
     if user:
         log_user(user.id, user.username, user.first_name)
+
+    is_group = bool(chat and chat.type in ["group", "supergroup"])
+    is_admin = is_admin_user(user.id if user else None)
 
     text = update.message.text
     if not text:
@@ -672,48 +953,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await handle_document(update, context)
         return
 
-    # 1. Bắt các nút bấm từ bàn phím Menu (Hỗ trợ cả tên mới ngắn gọn lẫn tên cũ)
     clean_text = text.strip()
-    if clean_text in ["⚡ Vượt Link", "📖 Hướng Dẫn Vượt Link", "📖 Hướng Dẫn"]:
-        await help_command(update, context)
-        return
-    elif clean_text in ["📁 Vượt File .txt", "📁 Vượt Link File .txt"]:
-        await batch_command(update, context)
-        return
-    elif clean_text in ["🌐 Dịch Vụ", "🌐 Dịch Vụ Hỗ Trợ"]:
-        await services_command(update, context)
-        return
-    elif clean_text in ["🔑 Lấy Mã 60s", "🔑 Cách Lấy Mã 60s"]:
-        msg = (
-            "🔑 <b>HƯỚNG DẪN TỰ ĐỘNG LẤY MÃ ĐẾM NGƯỢC 60 GIÂY:</b>\n\n"
-            "Khi trang rút gọn yêu cầu bạn tìm Google để vào 1 trang bài viết lấy mã:\n\n"
-            "👉 <b>Cách 1 (Nhanh nhất):</b> Bạn chỉ cần copy link bài viết đó và <b>dán thẳng vào đây</b>. Bot sẽ tự động hiện nút <code>[🔑 Tự Động Lấy Key Trên Web Này]</code> để bạn bấm!\n\n"
-            "👉 <b>Cách 2:</b> Gõ theo cú pháp lệnh:\n"
-            "<code>/key [link_bài_viết]</code>\n"
-            "<i>(Ví dụ: <code>/key https://tabare.com.co/vi-vn/</code>)</i>\n\n"
-            "⚡ <i>Bot sẽ tự động mở trình duyệt ngầm, cuộn trang, chờ đếm ngược 60s và gửi mã kích hoạt lại cho bạn!</i>"
-        )
-        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
-        return
-    elif clean_text in ["📊 Thống Kê (Admin)", "📊 Thống Kê"]:
-        await stats_command(update, context)
-        return
-    elif clean_text in ["🆔 ID Của Tôi", "🆔 ID"]:
-        await myid_command(update, context)
-        return
-    elif clean_text in ["📢 Hỗ Trợ", "📢 Hỗ Trợ / Báo Lỗi"]:
-        msg = (
-            "📢 <b>HỖ TRỢ & BÁO LỖI LINK:</b>\n\n"
-            "• Nếu bạn gặp link rút gọn nào bot chưa giải mã được, bạn chỉ cần gửi link đó vào khung chat.\n"
-            "• Bot sẽ lập tức hiển thị nút <b>[📢 Báo Lỗi Link Này Cho Admin]</b>.\n"
-            "• Khi bạn chạm vào nút đó, link lỗi sẽ được gửi trực tiếp đến Admin để nâng cấp bộ giải mã!\n\n"
-            "💡 <i>Hãy thử dán bất kỳ link nào vào đây để trải nghiệm nhé!</i>"
-        )
-        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
-        return
-
-
     urls = extract_urls(text)
+
+    # Trong Nhóm Chat: Nếu không có đường link nào thì bỏ qua (không trả lời tin nhắn thường tránh làm phiền nhóm)
+    if is_group and not urls:
+        return
+
+    # 1. Bắt các nút bấm từ bàn phím Menu (chỉ trong chat riêng với bot)
+    if not is_group:
+        if clean_text in ["⚡ Vượt Link", "📖 Hướng Dẫn Vượt Link", "📖 Hướng Dẫn"]:
+            await help_command(update, context)
+            return
+        elif clean_text in ["📁 Vượt File .txt", "📁 Vượt Link File .txt"]:
+            await batch_command(update, context)
+            return
+        elif clean_text in ["🌐 Dịch Vụ", "🌐 Dịch Vụ Hỗ Trợ"]:
+            await services_command(update, context)
+            return
+        elif clean_text in ["🔑 Lấy Mã 60s", "🔑 Cách Lấy Mã 60s"]:
+            msg = (
+                "🔑 <b>HƯỚNG DẪN TỰ ĐỘNG LẤY MÃ ĐẾM NGƯỢC 60 GIÂY:</b>\n\n"
+                "Khi trang rút gọn yêu cầu bạn tìm Google để vào 1 trang bài viết lấy mã:\n\n"
+                "👉 <b>Cách 1 (Nhanh nhất):</b> Bạn chỉ cần copy link bài viết đó và <b>dán thẳng vào đây</b>. Bot sẽ tự động hiện nút <code>[🔑 Tự Động Lấy Key Trên Web Này]</code> để bạn bấm!\n\n"
+                "👉 <b>Cách 2:</b> Gõ theo cú pháp lệnh:\n"
+                "<code>/key [link_bài_viết]</code>\n"
+                "<i>(Ví dụ: <code>/key https://tabare.com.co/vi-vn/</code>)</i>\n\n"
+                "⚡ <i>Bot sẽ tự động mở trình duyệt ngầm, cuộn trang, chờ đếm ngược 60s và gửi mã kích hoạt lại cho bạn!</i>"
+            )
+            await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+            return
+        elif clean_text in ["📋 Lịch Sử", "📋 Lịch Sử Vượt", "📋 Lịch Sử Vượt Link"]:
+            await history_command(update, context)
+            return
+        elif clean_text in ["📊 Thống Kê (Admin)", "📊 Thống Kê"]:
+            await stats_command(update, context)
+            return
+        elif clean_text in ["🆔 ID Của Tôi", "🆔 ID"]:
+            await myid_command(update, context)
+            return
+        elif clean_text in ["📢 Hỗ Trợ", "📢 Hỗ Trợ / Báo Lỗi"]:
+            msg = (
+                "📢 <b>HỖ TRỢ & BÁO LỖI LINK:</b>\n\n"
+                "• Nếu bạn gặp link rút gọn nào bot chưa giải mã được, bạn chỉ cần gửi link đó vào khung chat.\n"
+                "• Bot sẽ lập tức hiển thị nút <b>[📢 Báo Lỗi Link Này Cho Admin]</b>.\n"
+                "• Khi bạn chạm vào nút đó, link lỗi sẽ được gửi trực tiếp đến Admin để nâng cấp bộ giải mã!\n\n"
+                "💡 <i>Hãy thử dán bất kỳ link nào vào đây để trải nghiệm nhé!</i>"
+            )
+            await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+            return
+
     if not urls:
         await update.message.reply_text(
             "⚠️ Mình không tìm thấy đường link nào trong tin nhắn của bạn. Vui lòng gửi một liên kết hợp lệ (ví dụ: <code>https://...</code>)!",
@@ -721,9 +1010,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Kiểm tra chống spam gửi link
-    allowed, wait_sec = check_rate_limit(user.id if user else 0, "message")
+    # 2. Kiểm tra bắt buộc tham gia Kênh Telegram (Force Channel Subscribe - chỉ áp dụng chat cá nhân)
+    if not is_group and not is_admin:
+        is_sub, chan_url = await check_user_fsub(user.id if user else 0, context)
+        if not is_sub:
+            await update.message.reply_text(
+                "📢 <b>BẠN CẦN THAM GIA KÊNH ĐỂ SỬ DỤNG BOT!</b>\n"
+                "━━━━━━━━━━━━━━━━━━━━\n"
+                "Để tiếp tục sử dụng các dịch vụ vượt link miễn phí tốc độ cao, vui lòng nhấn nút tham gia kênh chính thức bên dưới:\n\n"
+                "👉 <i>Sau khi tham gia xong, hãy bấm nút <b>'Tôi Đã Tham Gia Xong'</b> để mở khóa ngay nhé!</i>",
+                parse_mode=ParseMode.HTML,
+                reply_markup=get_fsub_keyboard(chan_url)
+            )
+            return
+
+    # 3. Kiểm tra hạn mức trong ngày (Daily Quota)
+    allowed, remaining, is_vip = check_and_increment_quota(user.id if user else 0, is_admin=is_admin)
     if not allowed:
+        await update.message.reply_text(
+            "⚠️ <b>BẠN ĐÃ DÙNG HẾT HẠN MỨC HÔM NAY!</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Mỗi tài khoản miễn phí được tặng <b>30 lượt vượt link/ngày</b>.\n"
+            "• Hạn mức của bạn sẽ tự động được làm mới vào lúc <b>00:00 (nửa đêm)</b>.\n"
+            "• Hoặc liên hệ Admin để nâng cấp gói 👑 <b>VIP Member</b> không giới hạn!",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # 4. Kiểm tra chống spam gửi link
+    allowed_spam, wait_sec = check_rate_limit(user.id if user else 0, "message")
+    if not allowed_spam:
         await update.message.reply_text(
             f"⏳ <b>BẠN THAO TÁC QUÁ NHANH!</b>\n"
             f"Vui lòng chờ <b>{wait_sec}s</b> nữa trước khi gửi link tiếp theo để tránh quá tải máy chủ.",
@@ -765,18 +1081,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             result = await BypassManager.bypass(url)
 
             if result.success:
-                log_action(user.id if user else 0, url, "bypass", "success", result.engine_used)
+                # 5. Lọc sạch URL Anti-Tracking & Xem trước thông tin tệp
+                clean_target = clean_url(result.result_url)
+                meta = await fetch_file_metadata(clean_target)
+                file_info_str = ""
+                if meta.get("has_info"):
+                    file_info_str = f"📁 <b>Tệp tin:</b> <code>{html.escape(meta['file_name'])}</code> ({meta['file_size']})\n"
+
+                log_action(user.id if user else 0, url, "bypass", "success", result.engine_used, result_url=clean_target)
+
+                quota_str = ""
+                if not is_vip and not is_admin:
+                    quota_str = f"\n📊 <i>Hạn mức còn lại hôm nay: {remaining}/30 lượt</i>"
+
                 msg_text = (
                     f"✅ <b>VƯỢT LINK THÀNH CÔNG!</b>\n\n"
                     f"🔗 <b>Link ban đầu:</b>\n<code>{html.escape(result.original_url)}</code>\n\n"
-                    f"🎯 <b>Link đích:</b>\n<code>{html.escape(result.result_url)}</code>\n\n"
+                    f"🎯 <b>Link đích:</b>\n<code>{html.escape(clean_target)}</code>\n\n"
+                    f"{file_info_str}"
                     f"⚡ <b>Phương thức:</b> <code>{html.escape(result.engine_used)}</code>\n"
                     f"⏱️ <b>Thời gian xử lý:</b> <code>{result.time_taken}s</code>"
+                    f"{quota_str}"
                 )
                 await status_msg.edit_text(
                     msg_text,
                     parse_mode=ParseMode.HTML,
-                    reply_markup=get_result_keyboard(result.result_url)
+                    reply_markup=get_result_keyboard(clean_target)
                 )
             else:
                 log_action(user.id if user else 0, url, "bypass", "fail")
@@ -882,9 +1212,10 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async def bypass_single(url: str):
             async with sem:
                 res = await BypassManager.bypass(url)
+                clean_target = clean_url(res.result_url) if res.success else ""
                 if user:
-                    log_action(user.id, url, "batch", "success" if res.success else "fail", res.engine_used)
-                return url, res
+                    log_action(user.id, url, "batch", "success" if res.success else "fail", res.engine_used, result_url=clean_target)
+                return url, res, clean_target
 
         tasks = [bypass_single(u) for u in urls]
         completed_results = await asyncio.gather(*tasks)
@@ -900,12 +1231,12 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"# ========================================================\n"
         ]
 
-        for idx, (orig_url, res) in enumerate(completed_results, 1):
+        for idx, (orig_url, res, clean_target) in enumerate(completed_results, 1):
             if res.success:
                 success_count += 1
                 output_lines.append(f"[{idx}] THÀNH CÔNG ({res.engine_used} - {res.time_taken}s)")
                 output_lines.append(f"Link gốc: {orig_url}")
-                output_lines.append(f"Link đích: {res.result_url}\n")
+                output_lines.append(f"Link đích: {clean_target}\n")
             else:
                 output_lines.append(f"[{idx}] THẤT BẠI")
                 output_lines.append(f"Link gốc: {orig_url}")

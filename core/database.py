@@ -1,6 +1,6 @@
 import sqlite3
 import os
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "bot_data.db")
 
@@ -70,6 +70,21 @@ def init_db():
             value TEXT
         )
         """)
+        # Bảng quản lý hạn ngạch ngày & VIP thành viên
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS user_limits (
+            user_id INTEGER PRIMARY KEY,
+            is_vip INTEGER DEFAULT 0,
+            vip_until TIMESTAMP,
+            today_date TEXT,
+            today_count INTEGER DEFAULT 0
+        )
+        """)
+        # Đảm bảo bảng link_history có cột result_url
+        try:
+            cursor.execute("ALTER TABLE link_history ADD COLUMN result_url TEXT")
+        except Exception:
+            pass
         conn.commit()
 
 
@@ -89,14 +104,14 @@ def log_user(user_id: int, username: str | None, first_name: str | None):
     except Exception as e:
         print(f"[DB] log_user error: {e}")
 
-def log_action(user_id: int, url: str, action_type: str, status: str, engine: str = ""):
+def log_action(user_id: int, url: str, action_type: str, status: str, engine: str = "", result_url: str = ""):
     try:
         with get_db() as conn:
             cursor = conn.cursor()
             cursor.execute("""
-            INSERT INTO link_history (user_id, url, action_type, status, engine)
-            VALUES (?, ?, ?, ?, ?)
-            """, (user_id, url, action_type, status, engine))
+            INSERT INTO link_history (user_id, url, result_url, action_type, status, engine)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """, (user_id, url, result_url, action_type, status, engine))
             conn.commit()
     except Exception as e:
         print(f"[DB] log_action error: {e}")
@@ -312,6 +327,219 @@ def clear_all_reports() -> bool:
     except Exception as e:
         print(f"[DB] clear_all_reports error: {e}")
         return False
+
+def check_and_increment_quota(user_id: int, is_admin: bool = False, limit_per_day: int = 30) -> tuple[bool, int, bool]:
+    """
+    Kiểm tra và tăng số lượng link đã xử lý trong ngày của người dùng.
+    Trả về: (allowed: bool, remaining_today: int, is_vip: bool)
+    """
+    if is_admin:
+        return True, 999999, True
+
+    vn_tz = timezone(timedelta(hours=7))
+    now = datetime.now(vn_tz)
+    today_str = now.strftime("%Y-%m-%d")
+
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT is_vip, vip_until, today_date, today_count FROM user_limits WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+
+            if not row:
+                cursor.execute("""
+                INSERT INTO user_limits (user_id, is_vip, vip_until, today_date, today_count)
+                VALUES (?, 0, NULL, ?, 1)
+                """, (user_id, today_str))
+                conn.commit()
+                return True, limit_per_day - 1, False
+
+            is_vip = bool(row["is_vip"])
+            vip_until_str = row["vip_until"]
+            
+            # Kiểm tra thời hạn VIP nếu có
+            if is_vip and vip_until_str:
+                try:
+                    vip_until = datetime.fromisoformat(vip_until_str)
+                    if vip_until.tzinfo is None:
+                        vip_until = vip_until.replace(tzinfo=vn_tz)
+                    if now > vip_until:
+                        # VIP đã hết hạn
+                        is_vip = False
+                        cursor.execute("UPDATE user_limits SET is_vip = 0 WHERE user_id = ?", (user_id,))
+                except Exception:
+                    pass
+
+            if is_vip:
+                # Cập nhật số link VIP đã vượt hôm nay
+                if row["today_date"] != today_str:
+                    cursor.execute("UPDATE user_limits SET today_date = ?, today_count = 1 WHERE user_id = ?", (today_str, user_id))
+                else:
+                    cursor.execute("UPDATE user_limits SET today_count = today_count + 1 WHERE user_id = ?", (user_id,))
+                conn.commit()
+                return True, 999999, True
+
+            # Người dùng miễn phí
+            current_date = row["today_date"]
+            current_count = row["today_count"]
+
+            if current_date != today_str:
+                cursor.execute("UPDATE user_limits SET today_date = ?, today_count = 1 WHERE user_id = ?", (today_str, user_id))
+                conn.commit()
+                return True, limit_per_day - 1, False
+
+            if current_count >= limit_per_day:
+                return False, 0, False
+
+            cursor.execute("UPDATE user_limits SET today_count = today_count + 1 WHERE user_id = ?", (user_id,))
+            conn.commit()
+            return True, limit_per_day - (current_count + 1), False
+
+    except Exception as e:
+        print(f"[DB] check_and_increment_quota error: {e}")
+        return True, limit_per_day, False
+
+def set_user_vip(user_id: int, days: int) -> bool:
+    """Cấp hoặc gia hạn VIP cho user theo số ngày."""
+    vn_tz = timezone(timedelta(hours=7))
+    now = datetime.now(vn_tz)
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT vip_until FROM user_limits WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+
+            start_date = now
+            if row and row["vip_until"]:
+                try:
+                    cur_until = datetime.fromisoformat(row["vip_until"])
+                    if cur_until.tzinfo is None:
+                        cur_until = cur_until.replace(tzinfo=vn_tz)
+                    if cur_until > now:
+                        start_date = cur_until
+                except Exception:
+                    pass
+
+            new_until = start_date + timedelta(days=days)
+            until_str = new_until.isoformat()
+
+            cursor.execute("""
+            INSERT INTO user_limits (user_id, is_vip, vip_until, today_date, today_count)
+            VALUES (?, 1, ?, ?, 0)
+            ON CONFLICT(user_id) DO UPDATE SET
+                is_vip = 1,
+                vip_until = ?
+            """, (user_id, until_str, now.strftime("%Y-%m-%d"), until_str))
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"[DB] set_user_vip error: {e}")
+        return False
+
+def remove_user_vip(user_id: int) -> bool:
+    """Hủy trạng thái VIP của user."""
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("UPDATE user_limits SET is_vip = 0, vip_until = NULL WHERE user_id = ?", (user_id,))
+            conn.commit()
+            return True
+    except Exception as e:
+        print(f"[DB] remove_user_vip error: {e}")
+        return False
+
+def get_user_vip_info(user_id: int, limit_per_day: int = 30) -> dict:
+    """Lấy thông tin VIP và hạn mức hôm nay của người dùng."""
+    vn_tz = timezone(timedelta(hours=7))
+    now = datetime.now(vn_tz)
+    today_str = now.strftime("%Y-%m-%d")
+
+    is_admin = is_admin_user(user_id)
+    if is_admin:
+        return {
+            "is_vip": True,
+            "is_admin": True,
+            "vip_until": "Vĩnh viễn (Admin)",
+            "today_count": 0,
+            "remaining_today": 999999
+        }
+
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT is_vip, vip_until, today_date, today_count FROM user_limits WHERE user_id = ?", (user_id,))
+            row = cursor.fetchone()
+
+            if not row:
+                return {
+                    "is_vip": False,
+                    "is_admin": False,
+                    "vip_until": None,
+                    "today_count": 0,
+                    "remaining_today": limit_per_day
+                }
+
+            is_vip = bool(row["is_vip"])
+            vip_until_str = row["vip_until"]
+            if is_vip and vip_until_str:
+                try:
+                    vip_until = datetime.fromisoformat(vip_until_str)
+                    if vip_until.tzinfo is None:
+                        vip_until = vip_until.replace(tzinfo=vn_tz)
+                    if now > vip_until:
+                        is_vip = False
+                except Exception:
+                    pass
+
+            count = row["today_count"] if row["today_date"] == today_str else 0
+            rem = 999999 if is_vip else max(0, limit_per_day - count)
+            return {
+                "is_vip": is_vip,
+                "is_admin": False,
+                "vip_until": vip_until_str if is_vip else None,
+                "today_count": count,
+                "remaining_today": rem
+            }
+    except Exception as e:
+        print(f"[DB] get_user_vip_info error: {e}")
+        return {"is_vip": False, "is_admin": False, "vip_until": None, "today_count": 0, "remaining_today": limit_per_day}
+
+def get_user_history(user_id: int, limit: int = 5) -> list[dict]:
+    """Lấy danh sách các link vượt thành công gần nhất của người dùng."""
+    try:
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT url, result_url, engine, created_at
+            FROM link_history
+            WHERE user_id = ? AND status = 'success' AND result_url IS NOT NULL AND result_url != ''
+            ORDER BY id DESC
+            LIMIT ?
+            """, (user_id, limit))
+            rows = cursor.fetchall()
+            return [dict(r) for r in rows]
+    except Exception as e:
+        print(f"[DB] get_user_history error: {e}")
+        return []
+
+def get_channel_fsub() -> tuple[str, bool]:
+    """Lấy thông tin kênh bắt buộc tham gia (channel_id_or_username, is_enabled)."""
+    channel = get_setting("fsub_channel", "").strip()
+    enabled = get_setting("fsub_enabled", "0").strip() == "1"
+    return channel, enabled
+
+def set_channel_fsub(channel: str, enabled: bool = True) -> bool:
+    """Cài đặt kênh bắt buộc tham gia."""
+    set_setting("fsub_channel", channel.strip())
+    set_setting("fsub_enabled", "1" if enabled else "0")
+    return True
+
+def toggle_channel_fsub() -> bool:
+    """Bật / Tắt chế độ bắt buộc tham gia kênh."""
+    channel, enabled = get_channel_fsub()
+    new_state = not enabled
+    set_setting("fsub_enabled", "1" if new_state else "0")
+    return new_state
 
 # Khởi tạo DB khi load module
 init_db()
