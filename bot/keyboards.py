@@ -1,5 +1,5 @@
 import hashlib
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, KeyboardButton
 from core.database import save_url_key, get_url_by_key
 
 # Bộ nhớ tạm ánh xạ mã băm ngắn -> URL đầy đủ
@@ -49,3 +49,21 @@ def get_fail_keyboard(url: str, is_task_shortener: bool = False) -> InlineKeyboa
 
 def get_traffic_key_keyboard(url: str) -> InlineKeyboardMarkup:
     return get_fail_keyboard(url, is_task_shortener=False)
+
+def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
+    """
+    Tạo bàn phím menu cố định dưới thanh nhập tin nhắn Telegram.
+    Tự động phân quyền: Admin thấy nút Thống kê, người dùng thấy nút Hỗ trợ/Báo lỗi.
+    """
+    if is_admin:
+        keyboard = [
+            [KeyboardButton("📖 Hướng Dẫn Vượt Link"), KeyboardButton("🔑 Cách Lấy Mã 60s")],
+            [KeyboardButton("📊 Thống Kê (Admin)"), KeyboardButton("🆔 ID Của Tôi")]
+        ]
+    else:
+        keyboard = [
+            [KeyboardButton("📖 Hướng Dẫn Vượt Link"), KeyboardButton("🔑 Cách Lấy Mã 60s")],
+            [KeyboardButton("📢 Hỗ Trợ / Báo Lỗi"), KeyboardButton("🆔 ID Của Tôi")]
+        ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+

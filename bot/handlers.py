@@ -12,8 +12,10 @@ from .utils import extract_urls
 from .keyboards import (
     get_result_keyboard,
     get_fail_keyboard,
-    get_url_from_key
+    get_url_from_key,
+    get_main_menu_keyboard
 )
+
 
 ADMIN_ID = os.getenv("ADMIN_ID")
 
@@ -42,13 +44,23 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user:
         log_user(user.id, user.username, user.first_name)
-    await update.message.reply_text(WELCOME_MESSAGE, parse_mode=ParseMode.HTML)
+    is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+    await update.message.reply_text(
+        WELCOME_MESSAGE,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_menu_keyboard(is_admin)
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     if user:
         log_user(user.id, user.username, user.first_name)
-    await update.message.reply_text(HELP_MESSAGE, parse_mode=ParseMode.HTML)
+    is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+    await update.message.reply_text(
+        HELP_MESSAGE,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_menu_keyboard(is_admin)
+    )
 
 async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -219,6 +231,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
     if not text:
+        return
+
+    # 1. Bắt các nút bấm từ bàn phím Menu
+    clean_text = text.strip()
+    if clean_text == "📖 Hướng Dẫn Vượt Link":
+        await help_command(update, context)
+        return
+    elif clean_text == "🔑 Cách Lấy Mã 60s":
+        msg = (
+            "🔑 <b>HƯỚNG DẪN TỰ ĐỘNG LẤY MÃ ĐẾM NGƯỢC 60 GIÂY:</b>\n\n"
+            "Khi trang rút gọn yêu cầu bạn tìm Google để vào 1 trang bài viết lấy mã:\n\n"
+            "👉 <b>Cách 1 (Nhanh nhất):</b> Bạn chỉ cần copy link bài viết đó và <b>dán thẳng vào đây</b>. Bot sẽ tự động hiện nút <code>[🔑 Tự Động Lấy Key Trên Web Này]</code> để bạn bấm!\n\n"
+            "👉 <b>Cách 2:</b> Gõ theo cú pháp lệnh:\n"
+            "<code>/key [link_bài_viết]</code>\n"
+            "<i>(Ví dụ: <code>/key https://tabare.com.co/vi-vn/</code>)</i>\n\n"
+            "⚡ <i>Bot sẽ tự động mở trình duyệt ngầm, cuộn trang, chờ đếm ngược 60s và gửi mã kích hoạt lại cho bạn!</i>"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
+        return
+    elif clean_text == "📊 Thống Kê (Admin)":
+        await stats_command(update, context)
+        return
+    elif clean_text == "🆔 ID Của Tôi":
+        await myid_command(update, context)
+        return
+    elif clean_text == "📢 Hỗ Trợ / Báo Lỗi":
+        msg = (
+            "📢 <b>HỖ TRỢ & BÁO LỖI LINK:</b>\n\n"
+            "• Nếu bạn gặp link rút gọn nào bot chưa giải mã được, bạn chỉ cần gửi link đó vào khung chat.\n"
+            "• Bot sẽ lập tức hiển thị nút <b>[📢 Báo Lỗi Link Này Cho Admin]</b>.\n"
+            "• Khi bạn chạm vào nút đó, link lỗi sẽ được gửi trực tiếp đến Admin để nâng cấp bộ giải mã!\n\n"
+            "💡 <i>Hãy thử dán bất kỳ link nào vào đây để trải nghiệm nhé!</i>"
+        )
+        await update.message.reply_text(msg, parse_mode=ParseMode.HTML)
         return
 
     urls = extract_urls(text)

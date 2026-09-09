@@ -13,7 +13,7 @@ if sys.platform == "win32":
         pass
 
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.request import HTTPXRequest
 from telegram.ext import (
     ApplicationBuilder,
@@ -74,6 +74,20 @@ def check_token(token: str | None) -> bool:
         return False
     return True
 
+async def post_init(application) -> None:
+    """Đăng ký danh sách lệnh trực quan hiển thị tại nút Menu của Telegram."""
+    commands = [
+        BotCommand("start", "🚀 Bắt đầu / Làm mới bot"),
+        BotCommand("help", "📖 Hướng dẫn sử dụng chi tiết"),
+        BotCommand("key", "🔑 Lấy mã / key 60s từ link"),
+        BotCommand("myid", "🆔 Xem ID Telegram của bạn"),
+    ]
+    try:
+        await application.bot.set_my_commands(commands)
+        print("[+] Da dong bo danh sach menu lenh voi Telegram!")
+    except Exception as e:
+        print(f"[-] Khong the cap nhat menu lenh: {e}")
+
 def main():
     load_dotenv()
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -99,8 +113,10 @@ def main():
         ApplicationBuilder()
         .token(bot_token)
         .request(request_config)
+        .post_init(post_init)
         .build()
     )
+
 
     app.add_error_handler(error_handler)
     app.add_handler(CommandHandler("start", start_command))
