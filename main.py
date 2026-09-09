@@ -41,13 +41,37 @@ from bot.handlers import (
 
 
 
+import collections
+
+log_buffer = collections.deque(maxlen=100)
+
+class BufferLogHandler(logging.Handler):
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            log_buffer.append(msg)
+        except Exception:
+            pass
+
+buf_handler = BufferLogHandler()
+buf_handler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)s - %(message)s"))
+logging.getLogger().addHandler(buf_handler)
+
 # Máy chủ HTTP mini kiểm tra tình trạng sống (Health Check) để treo 24/7 trên Cloud
 class HealthCheckHandler(BaseHTTPRequestHandler):
     def do_GET(self):
+        if self.path == "/diag":
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain; charset=utf-8')
+            self.end_headers()
+            logs_text = "\n".join(log_buffer) or "No logs recorded yet."
+            self.wfile.write(logs_text.encode('utf-8'))
+            return
+
         self.send_response(200)
         self.send_header('Content-type', 'application/json; charset=utf-8')
         self.end_headers()
-        self.wfile.write('{"status":"ok","version":"v2.2_inline_active","message":"Bot Telegram dang chay 24/7"}'.encode('utf-8'))
+        self.wfile.write('{"status":"ok","version":"v2.3_diag_active","message":"Bot Telegram dang chay 24/7"}'.encode('utf-8'))
 
     def log_message(self, format, *args):
         pass

@@ -3,6 +3,7 @@ import io
 import asyncio
 import html
 import hashlib
+import logging
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
 from telegram import (
@@ -738,6 +739,7 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
 
     query = inline_query.query.strip()
     user = update.effective_user
+    logging.info(f"[Inline] Processing query: '{query}' from user: {user.id if user else None}")
     if user:
         log_user(user.id, user.username, user.first_name)
 
@@ -793,6 +795,7 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         )
         await inline_query.answer(results, cache_time=300)
+        logging.info("[Inline] Answered empty query with 3 prompt cards")
         return
 
     # 2. Người dùng đã nhập nội dung: Trích xuất danh sách link
@@ -814,17 +817,21 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         )
         await inline_query.answer(results, cache_time=10)
+        logging.info("[Inline] Answered no_url_found card")
         return
 
     target_url = urls[0]
 
-    # Thực hiện giải mã với timeout an toàn 8 giây
+    # Thực hiện giải mã với timeout an toàn 2.5 giây để luôn phản hồi nhanh với Telegram UI
+    res = None
     try:
         bypass_task = asyncio.create_task(BypassManager.bypass(target_url))
-        res = await asyncio.wait_for(bypass_task, timeout=8.0)
+        res = await asyncio.wait_for(bypass_task, timeout=2.5)
     except asyncio.TimeoutError:
+        logging.info(f"[Inline] Bypass timed out (>2.5s) for: {target_url}")
         res = None
-    except Exception:
+    except Exception as e:
+        logging.warning(f"[Inline] Bypass exception: {e}")
         res = None
 
     if res and res.success:
@@ -854,7 +861,9 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         )
         if user:
-            log_action(user.id, "inline_bypass", target_url, True, res.engine_used)
+            log_action(user.id, target_url, "inline_bypass", "success", res.engine_used)
+        await inline_query.answer(results, cache_time=300)
+        logging.info(f"[Inline] Successfully answered bypass result for: {target_url}")
     else:
         article_id = hashlib.md5(f"fail_{target_url}".encode()).hexdigest()
         orig_domain = urlparse(target_url).netloc or target_url
@@ -876,7 +885,7 @@ async def inline_query_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             )
         )
         if user:
-            log_action(user.id, "inline_bypass", target_url, False, "Inline Failed / Timeout")
-
-    await inline_query.answer(results, cache_time=300)
+            log_action(user.id, target_url, "inline_bypass", "fail", "Timeout / Failed")
+        await inline_query.answer(results, cache_time=10)
+        logging.info(f"[Inline] Answered fallback card for: {target_url}")
 
