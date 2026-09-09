@@ -274,6 +274,104 @@ def resolve_google_drive(url: str) -> str | None:
         return f"https://drive.google.com/uc?export=download&id={file_id}"
     return None
 
+TERABOX_DOMAINS = [
+    "terabox.com", "teraboxapp.com", "1024tera.com", "terasharelink.com",
+    "terabox.app", "freeterabox.com", "mirrobox.com", "nephobox.com", "4funbox.com"
+]
+
+def is_terabox_url(url: str) -> bool:
+    domain = urlparse(url).netloc.lower()
+    return any(td in domain for td in TERABOX_DOMAINS)
+
+def extract_terabox_surl(url: str) -> str | None:
+    match = re.search(r'/s/([a-zA-Z0-9_-]+)', url)
+    if match:
+        surl = match.group(1)
+        if surl.startswith("1"):
+            return surl[1:]
+        return surl
+    parsed = urlparse(url)
+    qs = parse_qs(parsed.query)
+    if "surl" in qs and qs["surl"]:
+        surl = qs["surl"][0]
+        if surl.startswith("1"):
+            return surl[1:]
+        return surl
+    return None
+
+async def resolve_terabox(url: str) -> str | None:
+    """
+    Bóc tách link tải trực tiếp (Direct Download Link) từ link Terabox không cần app.
+    Hỗ trợ terabox.com, teraboxapp, 1024tera, terasharelink...
+    """
+    if not is_terabox_url(url):
+        return None
+
+    surl = extract_terabox_surl(url)
+    
+    # 1. Thử API Savetube Terabox Downloader
+    try:
+        async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=12.0) as client:
+            resp = await client.post(
+                "https://ytshorts.savetube.me/api/v1/terabox-downloader",
+                json={"url": url}
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                items = data.get("response", [])
+                if items and isinstance(items, list):
+                    item = items[0]
+                    resolutions = item.get("resolutions", {})
+                    dlink = (
+                        resolutions.get("Fast Download")
+                        or resolutions.get("HD Video")
+                        or resolutions.get("Download")
+                    )
+                    if dlink and str(dlink).startswith(("http://", "https://")):
+                        return str(dlink)
+    except Exception as e:
+        print(f"[engine_resolvers] terabox API 1 error: {e}")
+
+    # 2. Thử API Workers Terabox DL
+    if surl:
+        try:
+            async with httpx.AsyncClient(headers=DEFAULT_HEADERS, timeout=12.0) as client:
+                api_url = f"https://terabox-dl.qtcloud.workers.dev/api/get-info?shorturl={surl}"
+                resp = await client.get(api_url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    dlink = data.get("download_url") or data.get("dlink")
+                    if dlink and str(dlink).startswith(("http://", "https://")):
+                        return str(dlink)
+                    file_list = data.get("list", [])
+                    if file_list and isinstance(file_list, list):
+                        dlink = file_list[0].get("dlink")
+                        if dlink and str(dlink).startswith(("http://", "https://")):
+                            return str(dlink)
+        except Exception as e:
+            print(f"[engine_resolvers] terabox API 2 error: {e}")
+
+    # 3. Thử API Terabox App Info
+    if surl:
+        try:
+            headers = {
+                **DEFAULT_HEADERS,
+                "Referer": "https://www.terabox.app/",
+            }
+            async with httpx.AsyncClient(headers=headers, timeout=12.0) as client:
+                resp = await client.get(f"https://www.terabox.app/api/shorturlinfo?shorturl={surl}&root=1")
+                if resp.status_code == 200:
+                    data = resp.json()
+                    file_list = data.get("list", [])
+                    if file_list and isinstance(file_list, list):
+                        dlink = file_list[0].get("dlink")
+                        if dlink and str(dlink).startswith(("http://", "https://")):
+                            return str(dlink)
+        except Exception as e:
+            print(f"[engine_resolvers] terabox API 3 error: {e}")
+
+    return None
+
 async def run_custom_resolvers(url: str) -> str | None:
     domain = urlparse(url).netloc.lower()
     
@@ -282,36 +380,42 @@ async def run_custom_resolvers(url: str) -> str | None:
     if query_res:
         return query_res
 
-    # 2. Google Drive direct link
+    # 2. Terabox Direct Download Link
+    if is_terabox_url(url):
+        tb_res = await resolve_terabox(url)
+        if tb_res:
+            return tb_res
+
+    # 3. Google Drive direct link
     if "drive.google.com" in domain:
         drive_res = resolve_google_drive(url)
         if drive_res:
             return drive_res
 
-    # 3. Thử giải mã AdLinkFly (linkx, link1s, megaurl, droplink, shrtfly...)
+    # 4. Thử giải mã AdLinkFly (linkx, link1s, megaurl, droplink, shrtfly...)
     adlink_res = await resolve_adlinkfly(url)
     if adlink_res:
         return adlink_res
 
-    # 4. Dịch vụ Ouo (ouo.io, ouo.press)
+    # 5. Dịch vụ Ouo (ouo.io, ouo.press)
     if "ouo.io" in domain or "ouo.press" in domain:
         ouo_res = await resolve_ouo(url)
         if ouo_res:
             return ouo_res
 
-    # 5. Dịch vụ Sub2Unlock / Sub4Unlock
+    # 6. Dịch vụ Sub2Unlock / Sub4Unlock
     if "sub2unlock" in domain or "sub4unlock" in domain:
         return await resolve_sub2unlock(url)
 
-    # 6. Mediafire
+    # 7. Mediafire
     if "mediafire.com" in domain:
         return await resolve_mediafire(url)
 
-    # 7. Pastebin
+    # 8. Pastebin
     if "pastebin.com" in domain:
         return await resolve_pastebin(url)
 
-    # 8. Quét Meta Refresh và JS Redirects nếu có
+    # 9. Quét Meta Refresh và JS Redirects nếu có
     meta_res = await resolve_meta_and_js_redirect(url)
     if meta_res:
         return meta_res

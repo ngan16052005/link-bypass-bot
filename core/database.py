@@ -52,6 +52,17 @@ def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
         """)
+        # Bảng bộ nhớ đệm kết quả vượt link toàn cầu (Global Link Cache)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS bypass_cache (
+            url_hash TEXT PRIMARY KEY,
+            original_url TEXT,
+            result_url TEXT,
+            engine TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bypass_cache_created ON bypass_cache(created_at)")
         conn.commit()
 
 
@@ -161,6 +172,64 @@ def get_url_by_key(short_key: str) -> str | None:
     except Exception as e:
         print(f"[DB] get_url_by_key error: {e}")
         return None
+
+def get_cached_bypass(url: str) -> dict | None:
+    """
+    Lấy kết quả giải mã đã lưu trong bộ nhớ đệm (Hạn sử dụng: 7 ngày).
+    Trả về: {"result_url": ..., "engine": ...} hoặc None.
+    """
+    try:
+        import hashlib
+        clean_url = url.strip()
+        url_hash = hashlib.sha256(clean_url.encode("utf-8")).hexdigest()
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT result_url, engine FROM bypass_cache 
+            WHERE url_hash = ? AND created_at >= datetime('now', '-7 days')
+            """, (url_hash,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "result_url": row["result_url"],
+                    "engine": row["engine"]
+                }
+    except Exception as e:
+        print(f"[DB] get_cached_bypass error: {e}")
+    return None
+
+def save_cached_bypass(original_url: str, result_url: str, engine: str = ""):
+    """
+    Lưu kết quả giải mã vào cache toàn cầu.
+    Tự động dọn dẹp các link cũ hơn 7 ngày và giữ tối đa 5000 link mới nhất để vĩnh viễn không đầy ổ cứng.
+    """
+    try:
+        import hashlib
+        clean_url = original_url.strip()
+        res_url = result_url.strip()
+        if not clean_url or not res_url or clean_url == res_url:
+            return
+        url_hash = hashlib.sha256(clean_url.encode("utf-8")).hexdigest()
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT OR REPLACE INTO bypass_cache (url_hash, original_url, result_url, engine, created_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (url_hash, clean_url, res_url, engine))
+            
+            # 1. Tự động xóa các link lưu quá 7 ngày
+            cursor.execute("DELETE FROM bypass_cache WHERE created_at < datetime('now', '-7 days')")
+            
+            # 2. Giữ tối đa 5000 link mới nhất
+            cursor.execute("""
+            DELETE FROM bypass_cache 
+            WHERE url_hash NOT IN (
+                SELECT url_hash FROM bypass_cache ORDER BY created_at DESC LIMIT 5000
+            )
+            """)
+            conn.commit()
+    except Exception as e:
+        print(f"[DB] save_cached_bypass error: {e}")
 
 # Khởi tạo DB khi load module
 init_db()
