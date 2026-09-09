@@ -1,4 +1,6 @@
 import os
+import io
+import asyncio
 import html
 from urllib.parse import urlparse
 from datetime import datetime, timezone, timedelta
@@ -99,6 +101,28 @@ async def services_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_menu_keyboard(is_admin)
     )
+
+BATCH_MESSAGE = (
+    "📁 <b>HƯỚNG DẪN VƯỢT LINK HÀNG LOẠT BẰNG FILE .TXT:</b>\n"
+    "━━━━━━━━━━━━━━━━━━━━\n"
+    "Nếu bạn có nhiều link cần giải mã cùng lúc (ví dụ tải phim, game nhiều part, tài liệu):\n\n"
+    "1️⃣ Tạo một file <b>.txt</b> trên điện thoại hoặc máy tính.\n"
+    "2️⃣ Dán các đường link rút gọn vào file đó (mỗi link một dòng, tối đa <b>30 link</b> / lần).\n"
+    "3️⃣ Gửi file <b>.txt</b> đó trực tiếp vào khung chat này!\n\n"
+    "⚡ <i>Bot sẽ tự động giải mã toàn bộ và gửi lại cho bạn 1 file kết quả chứa sạch link gốc!</i>"
+)
+
+async def batch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    if user:
+        log_user(user.id, user.username, user.first_name)
+    is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+    await update.message.reply_text(
+        BATCH_MESSAGE,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_menu_keyboard(is_admin)
+    )
+
 
 
 async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -292,12 +316,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
     if not text:
+        if update.message.document:
+            await handle_document(update, context)
         return
 
     # 1. Bắt các nút bấm từ bàn phím Menu
     clean_text = text.strip()
     if clean_text == "📖 Hướng Dẫn Vượt Link":
         await help_command(update, context)
+        return
+    elif clean_text == "📁 Vượt Link File .txt":
+        await batch_command(update, context)
         return
     elif clean_text == "🌐 Dịch Vụ Hỗ Trợ":
         await services_command(update, context)
@@ -413,3 +442,146 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚠️ Có lỗi phát sinh khi xử lý: <code>{html.escape(str(e))}</code>",
                 parse_mode=ParseMode.HTML
             )
+
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Xử lý file .txt chứa danh sách nhiều link rút gọn và xuất file kết quả.
+    """
+    user = update.effective_user
+    if user:
+        log_user(user.id, user.username, user.first_name)
+
+    doc = update.message.document
+    if not doc:
+        return
+
+    # 1. Kiểm tra định dạng file
+    file_name = doc.file_name or "links.txt"
+    if not file_name.lower().endswith(".txt"):
+        await update.message.reply_text(
+            "⚠️ Bot hiện chỉ hỗ trợ xử lý hàng loạt qua file văn bản định dạng <b>.txt</b>!\nVui lòng lưu danh sách link vào file <code>.txt</code> rồi gửi lại nhé.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    # 2. Kiểm tra dung lượng file (tối đa 1MB)
+    if doc.file_size and doc.file_size > 1024 * 1024:
+        await update.message.reply_text("⚠️ File quá lớn (tối đa 1MB). Vui lòng chia nhỏ file và gửi lại.")
+        return
+
+    # 3. Kiểm tra chống spam gửi file
+    allowed, wait_sec = check_rate_limit(user.id if user else 0, "batch")
+    if not allowed:
+        await update.message.reply_text(
+            f"⏳ <b>BẠN GỬI FILE QUÁ NHANH!</b>\n"
+            f"Vui lòng chờ <b>{wait_sec}s</b> nữa trước khi gửi file tiếp theo để hệ thống xử lý ổn định.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    status_msg = await update.message.reply_text(
+        f"📥 Đang tải và kiểm tra file <code>{html.escape(file_name)}</code>...",
+        parse_mode=ParseMode.HTML
+    )
+
+    try:
+        # Tải file về bộ nhớ RAM
+        tg_file = await context.bot.get_file(doc.file_id)
+        file_bytes = await tg_file.download_as_bytearray()
+        
+        # Đọc nội dung file với nhiều bảng mã
+        text_content = ""
+        for enc in ["utf-8", "utf-16", "latin-1", "cp1252"]:
+            try:
+                text_content = file_bytes.decode(enc)
+                break
+            except Exception:
+                continue
+
+        if not text_content:
+            await status_msg.edit_text("⚠️ Không thể đọc nội dung file văn bản này.")
+            return
+
+        urls = extract_urls(text_content)
+        if not urls:
+            await status_msg.edit_text(
+                "⚠️ Không tìm thấy bất kỳ đường link (URL) hợp lệ nào trong file bạn vừa gửi!\nHãy đảm bảo các link bắt đầu bằng <code>http://</code> hoặc <code>https://</code>.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        total_urls = len(urls)
+        max_allowed = 30
+        if total_urls > max_allowed:
+            urls = urls[:max_allowed]
+            await update.message.reply_text(f"ℹ️ File có {total_urls} link. Bot sẽ ưu tiên giải mã {max_allowed} link đầu tiên nhé!")
+
+        num_to_process = len(urls)
+        await status_msg.edit_text(
+            f"⚡ <b>BẮT ĐẦU XỬ LÝ HÀNG LOẠT {num_to_process} LINK...</b>\n"
+            f"⏳ Vui lòng chờ trong giây lát...",
+            parse_mode=ParseMode.HTML
+        )
+
+        # Xử lý đa luồng song song với Semaphore(3)
+        sem = asyncio.Semaphore(3)
+
+        async def bypass_single(url: str):
+            async with sem:
+                res = await BypassManager.bypass(url)
+                if user:
+                    log_action(user.id, url, "batch", "success" if res.success else "fail", res.engine_used)
+                return url, res
+
+        tasks = [bypass_single(u) for u in urls]
+        completed_results = await asyncio.gather(*tasks)
+
+        # Tổng hợp kết quả
+        success_count = 0
+        now_vn = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M:%S - %d/%m/%Y")
+        output_lines = [
+            f"# ========================================================",
+            f"# KẾT QUẢ VƯỢT LINK HÀNG LOẠT - BOT @N1_link_bot",
+            f"# Thời gian xử lý: {now_vn}",
+            f"# Tên file gốc: {file_name}",
+            f"# ========================================================\n"
+        ]
+
+        for idx, (orig_url, res) in enumerate(completed_results, 1):
+            if res.success:
+                success_count += 1
+                output_lines.append(f"[{idx}] THÀNH CÔNG ({res.engine_used} - {res.time_taken}s)")
+                output_lines.append(f"Link gốc: {orig_url}")
+                output_lines.append(f"Link đích: {res.result_url}\n")
+            else:
+                output_lines.append(f"[{idx}] THẤT BẠI")
+                output_lines.append(f"Link gốc: {orig_url}")
+                output_lines.append(f"Lý do: Không thể vượt hoặc yêu cầu captcha thủ công\n")
+
+        output_lines.append(f"# ========================================================")
+        output_lines.append(f"# TỔNG KẾT: {success_count}/{num_to_process} link thành công ({round(success_count/num_to_process*100, 1)}%)")
+        output_lines.append(f"# Cảm ơn bạn đã sử dụng Bot @N1_link_bot!")
+
+        file_data = "\n".join(output_lines).encode("utf-8")
+        out_stream = io.BytesIO(file_data)
+        out_stream.name = f"ket_qua_{file_name}"
+
+        rate_val = round(success_count / num_to_process * 100, 1)
+        await status_msg.edit_text(
+            f"🎉 <b>XỬ LÝ HÀNG LOẠT HOÀN TẤT!</b>\n\n"
+            f"📊 <b>Kết quả:</b> <code>{success_count}/{num_to_process}</code> link thành công (<code>{rate_val}%</code>)\n"
+            f"📁 <i>File kết quả chi tiết đang được gửi bên dưới...</i>",
+            parse_mode=ParseMode.HTML
+        )
+
+        caption = f"✅ Kết quả vượt link hàng loạt từ file: {file_name}\n🎯 Thành công: {success_count}/{num_to_process} link."
+        await context.bot.send_document(
+            chat_id=update.effective_chat.id,
+            document=out_stream,
+            filename=f"ket_qua_{file_name}",
+            caption=caption
+        )
+
+    except Exception as e:
+        await status_msg.edit_text(f"⚠️ Có lỗi xảy ra trong quá trình xử lý file: {html.escape(str(e))}")
+

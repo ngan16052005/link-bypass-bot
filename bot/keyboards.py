@@ -58,16 +58,17 @@ def get_main_menu_keyboard(is_admin: bool = False) -> ReplyKeyboardMarkup:
     if is_admin:
         keyboard = [
             [KeyboardButton("📖 Hướng Dẫn Vượt Link"), KeyboardButton("🔑 Cách Lấy Mã 60s")],
-            [KeyboardButton("🌐 Dịch Vụ Hỗ Trợ"), KeyboardButton("📊 Thống Kê (Admin)")],
-            [KeyboardButton("🆔 ID Của Tôi")]
+            [KeyboardButton("📁 Vượt Link File .txt"), KeyboardButton("🌐 Dịch Vụ Hỗ Trợ")],
+            [KeyboardButton("📊 Thống Kê (Admin)"), KeyboardButton("🆔 ID Của Tôi")]
         ]
     else:
         keyboard = [
             [KeyboardButton("📖 Hướng Dẫn Vượt Link"), KeyboardButton("🔑 Cách Lấy Mã 60s")],
-            [KeyboardButton("🌐 Dịch Vụ Hỗ Trợ"), KeyboardButton("📢 Hỗ Trợ / Báo Lỗi")],
-            [KeyboardButton("🆔 ID Của Tôi")]
+            [KeyboardButton("📁 Vượt Link File .txt"), KeyboardButton("🌐 Dịch Vụ Hỗ Trợ")],
+            [KeyboardButton("📢 Hỗ Trợ / Báo Lỗi"), KeyboardButton("🆔 ID Của Tôi")]
         ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
+
 
 
 

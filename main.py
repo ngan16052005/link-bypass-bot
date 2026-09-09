@@ -27,12 +27,15 @@ from bot.handlers import (
     start_command,
     help_command,
     services_command,
+    batch_command,
     myid_command,
     stats_command,
     key_command,
     callback_router,
-    handle_message
+    handle_message,
+    handle_document
 )
+
 
 
 # Máy chủ HTTP mini kiểm tra tình trạng sống (Health Check) để treo 24/7 trên Cloud
@@ -81,10 +84,12 @@ async def post_init(application) -> None:
     commands = [
         BotCommand("start", "🚀 Bắt đầu / Làm mới bot"),
         BotCommand("help", "📖 Hướng dẫn sử dụng chi tiết"),
+        BotCommand("batch", "📁 Vượt link hàng loạt bằng file .txt"),
         BotCommand("services", "🌐 Danh sách dịch vụ hỗ trợ"),
         BotCommand("key", "🔑 Lấy mã / key 60s từ link"),
         BotCommand("myid", "🆔 Xem ID Telegram của bạn"),
     ]
+
 
     try:
         await application.bot.set_my_commands(commands)
@@ -126,11 +131,14 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("services", services_command))
+    app.add_handler(CommandHandler("batch", batch_command))
     app.add_handler(CommandHandler("myid", myid_command))
     app.add_handler(CommandHandler("stats", stats_command))
     app.add_handler(CommandHandler("key", key_command))
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
+
 
 
     print("=" * 60)

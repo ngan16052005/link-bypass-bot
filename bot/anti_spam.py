@@ -5,8 +5,9 @@ import os
 USER_ACTIVITY = {}
 
 # Cấu hình thời gian giãn cách (Cooldown tính bằng giây)
-MESSAGE_COOLDOWN = 3.0  # Gửi link / tin nhắn
+MESSAGE_COOLDOWN = 3.0   # Gửi link / tin nhắn
 KEY_GRAB_COOLDOWN = 10.0 # Chạy trình duyệt ảo cào key 60s (tiêu tốn tài nguyên)
+BATCH_COOLDOWN = 15.0    # Gửi file vượt hàng loạt
 
 def check_rate_limit(user_id: int, action_type: str = "message") -> tuple[bool, float]:
     """
@@ -19,7 +20,13 @@ def check_rate_limit(user_id: int, action_type: str = "message") -> tuple[bool, 
         return True, 0.0
 
     now = time.time()
-    cooldown = KEY_GRAB_COOLDOWN if action_type == "key" else MESSAGE_COOLDOWN
+    if action_type == "key":
+        cooldown = KEY_GRAB_COOLDOWN
+    elif action_type == "batch":
+        cooldown = BATCH_COOLDOWN
+    else:
+        cooldown = MESSAGE_COOLDOWN
+
 
     user_records = USER_ACTIVITY.setdefault(user_id, {})
     last_time = user_records.get(action_type, 0.0)
