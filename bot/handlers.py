@@ -327,7 +327,8 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         [
             InlineKeyboardButton("👑 Danh Sách VIP", callback_data="dash:admin_viplist"),
             InlineKeyboardButton("🚨 Link Báo Lỗi", callback_data="dash:admin_reports")
-        ]
+        ],
+        [InlineKeyboardButton("🏠 Menu Chính", callback_data="dash:menu")]
     ]
     await update.message.reply_text(
         stats_msg,
@@ -649,7 +650,8 @@ async def viplist_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     keyboard = [
         [InlineKeyboardButton("🔄 Làm Mới", callback_data="dash:admin_viplist")],
-        [InlineKeyboardButton("📊 Thống Kê Chung", callback_data="dash:stats")]
+        [InlineKeyboardButton("📊 Thống Kê Chung", callback_data="dash:stats")],
+        [InlineKeyboardButton("🏠 Menu Chính", callback_data="dash:menu")]
     ]
     await update.message.reply_text(
         msg,
@@ -791,15 +793,18 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Xử lý Bảng Điều Khiển Interactive Dashboard (chuyển trang ngay tại chỗ)
     if data.startswith("dash:"):
         action = data[5:]
-        is_admin = bool(user and str(user.id) == os.getenv("ADMIN_ID", "").strip())
+        is_admin = bool(user and is_admin_user(user.id))
         name = user.first_name if user and user.first_name else "bạn"
 
-        if action in ["menu", "refresh"]:
-            await query.edit_message_text(
-                get_dashboard_text(name),
-                parse_mode=ParseMode.HTML,
-                reply_markup=get_dashboard_inline_keyboard(is_admin)
-            )
+        if action in ["menu", "refresh", "back"]:
+            try:
+                await query.edit_message_text(
+                    get_dashboard_text(name),
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_dashboard_inline_keyboard(is_admin)
+                )
+            except Exception:
+                pass
         elif action == "help":
             await query.edit_message_text(
                 HELP_MESSAGE,
@@ -855,14 +860,17 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
             keyboard = [
                 [InlineKeyboardButton("🔄 Làm Mới", callback_data="dash:history")],
-                [InlineKeyboardButton("◀️ Quay Lại Menu", callback_data="dash:back")]
+                [InlineKeyboardButton("🔙 Quay Lại Bảng Điều Khiển", callback_data="dash:menu")]
             ]
-            await query.edit_message_text(
-                hist_text,
-                parse_mode=ParseMode.HTML,
-                disable_web_page_preview=True,
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            try:
+                await query.edit_message_text(
+                    hist_text,
+                    parse_mode=ParseMode.HTML,
+                    disable_web_page_preview=True,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except Exception:
+                pass
         elif action == "myid":
             vip_info = get_user_vip_info(user.id if user else 0)
             if is_admin:
@@ -958,13 +966,16 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     InlineKeyboardButton("👑 Danh Sách VIP", callback_data="dash:admin_viplist"),
                     InlineKeyboardButton("🚨 Danh Sách Báo Lỗi", callback_data="dash:admin_reports")
                 ],
-                [InlineKeyboardButton("◀️ Quay Lại Menu", callback_data="dash:back")]
+                [InlineKeyboardButton("🔙 Quay Lại Bảng Điều Khiển", callback_data="dash:menu")]
             ]
-            await query.edit_message_text(
-                stats_msg,
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(stats_keyboard)
-            )
+            try:
+                await query.edit_message_text(
+                    stats_msg,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(stats_keyboard)
+                )
+            except Exception:
+                pass
         elif action == "admin_reports":
             if not is_admin:
                 await query.answer("⛔ Mục này chỉ dành riêng cho Admin quản trị Bot!", show_alert=True)
@@ -992,13 +1003,16 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             keyboard = [
                 [InlineKeyboardButton("🔄 Làm Mới", callback_data="dash:admin_reports")],
                 [InlineKeyboardButton("◀️ Trở Lại Thống Kê", callback_data="dash:stats")],
-                [InlineKeyboardButton("🏠 Menu Chính", callback_data="dash:back")]
+                [InlineKeyboardButton("🏠 Menu Chính", callback_data="dash:menu")]
             ]
-            await query.edit_message_text(
-                rep_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+            try:
+                await query.edit_message_text(
+                    rep_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(keyboard)
+                )
+            except Exception:
+                pass
         elif action == "admin_viplist":
             if not is_admin:
                 await query.answer("⛔ Mục này chỉ dành riêng cho Admin quản trị Bot!", show_alert=True)
@@ -1033,13 +1047,16 @@ async def callback_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
             vip_keyboard = [
                 [InlineKeyboardButton("🔄 Làm Mới", callback_data="dash:admin_viplist")],
                 [InlineKeyboardButton("◀️ Trở Lại Thống Kê", callback_data="dash:stats")],
-                [InlineKeyboardButton("🏠 Menu Chính", callback_data="dash:back")]
+                [InlineKeyboardButton("🏠 Menu Chính", callback_data="dash:menu")]
             ]
-            await query.edit_message_text(
-                vip_text,
-                parse_mode=ParseMode.HTML,
-                reply_markup=InlineKeyboardMarkup(vip_keyboard)
-            )
+            try:
+                await query.edit_message_text(
+                    vip_text,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=InlineKeyboardMarkup(vip_keyboard)
+                )
+            except Exception:
+                pass
         return
 
     # Xử lý nút Lấy Key
