@@ -102,6 +102,15 @@ async def grab_traffic_key(
                 )
                 page = await context.new_page()
 
+                # Luôn duy trì trang web ở trạng thái visible/active để không bị dừng đếm ngược ngầm
+                try:
+                    await page.add_init_script("""
+                        Object.defineProperty(document, 'visibilityState', { get: () => 'visible' });
+                        Object.defineProperty(document, 'hidden', { get: () => false });
+                    """)
+                except Exception:
+                    pass
+
                 # TỐI ƯU HÓA BĂNG THÔNG: Chặn ảnh, font chữ và media nặng
                 async def route_filter(route):
                     req_url = route.request.url.lower()
@@ -200,18 +209,39 @@ async def grab_traffic_key(
                 if not button_found and not has_task_script:
                     return False, "", "Trang web này không có nút lấy mã hoặc đồng hồ đếm ngược nhiệm vụ."
 
-                # 4. Vòng lặp chờ đếm ngược thông minh (Tự thích ứng thời gian 60s, 82s, 90s, 120s)
+                # 4. Vòng lặp chờ đếm ngược thông minh (Tự bẻ khóa tạm dừng & tự thích ứng thời gian)
                 total_expected_wait = 60
-                max_timeout = 120
-                interval = 2.5
+                total_wait_fixed = False
+                max_timeout = 150
+                interval = 2.0
                 waited = 0
                 second_click_done = False
+                post_clicked = False
 
                 while waited < max_timeout:
                     if captured_key["code"]:
                         return True, captured_key["code"], "Đã nhận mã từ hệ thống thành công!"
 
-                    # Quét phần tử chứa mã
+                    # A. Bẻ khóa Checkpoint 1: Tự động "Chạm vào màn hình" (Touch Screen)
+                    try:
+                        await page.mouse.click(350, 350)
+                        await page.evaluate("""() => {
+                            window.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                            window.dispatchEvent(new Event('touchstart'));
+                        }""")
+                    except Exception:
+                        pass
+
+                    # B. Bẻ khóa Checkpoint 2: Định kỳ cuộn lên đỉnh trang (scrollTop=0) để kích hoạt scrollUp
+                    if int(waited // interval) % 3 == 0:
+                        try:
+                            await page.evaluate("window.scrollTo(0, 0); window.dispatchEvent(new Event('scroll'));")
+                            await asyncio.sleep(0.2)
+                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight); window.dispatchEvent(new Event('scroll'));")
+                        except Exception:
+                            pass
+
+                    # C. Quét phần tử chứa mã trong DOM
                     try:
                         for code_sel in ['#traffic_code', '#show_code', '#code_output', '.layma-code', '[id*="traffic"]', '[id*="layma"]']:
                             try:
@@ -234,22 +264,47 @@ async def grab_traffic_key(
                                 return True, code_found, "Đã đọc được mã hiển thị trên trang!"
 
                         # 2. Đọc động số giây còn lại trên nút hoặc trên bài viết
-                        m_countdown = re.search(r'(?:Lấy mã sau|Chờ|Wait|Còn lại|Sau)\s*(\d{1,3})', text_content, re.IGNORECASE)
+                        m_countdown = re.search(r'(?:Lấy mã sau|Chờ|Wait|Còn lại|Sau|tiếp tục lấy mã sau)\s*(\d{1,3})', text_content, re.IGNORECASE)
                         detected_rem = None
                         if m_countdown:
                             detected_rem = int(m_countdown.group(1))
-                            total_expected_wait = max(total_expected_wait, int(waited + detected_rem))
-                            max_timeout = max(max_timeout, total_expected_wait + 35)
+                            if not total_wait_fixed and detected_rem > 0:
+                                total_expected_wait = max(total_expected_wait, detected_rem)
+                                max_timeout = min(170, total_expected_wait + 45)
+                                total_wait_fixed = True
 
-                        # 3. Khi đồng hồ về 0 hoặc biến mất: kiểm tra nút bấm Lần 2 (Second Click)
+                        # 3. Yêu cầu chuyển tiếp bài viết (Click Post Requirement)
+                        msg_text = await page.evaluate("() => document.querySelector('#message') ? document.querySelector('#message').innerText : ''")
+                        if ("nhấn bài viết" in (msg_text + text_content).lower() or "bài viết bất kỳ" in (msg_text + text_content).lower() or detected_rem == 0) and not post_clicked and waited > 15:
+                            post_clicked = True
+                            if status_callback:
+                                await status_callback("⚡ Đang tự động chuyển tiếp sang bài viết xác thực cuối cùng...")
+                            try:
+                                current_host = urlparse(page.url).netloc
+                                links = await page.locator('article a, .entry-title a, h2 a, h3 a, a[href*="/vi-vn/"]').all()
+                                for l in links:
+                                    try:
+                                        h = await l.get_attribute("href")
+                                        if h and current_host in h and h.rstrip("/") != page.url.rstrip("/"):
+                                            await l.click()
+                                            await page.wait_for_load_state("domcontentloaded", timeout=12000)
+                                            await asyncio.sleep(1.5)
+                                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
+                                            break
+                                    except Exception:
+                                        continue
+                            except Exception:
+                                pass
+
+                        # 4. Khi đồng hồ về 0: kiểm tra các nút bấm xác thực lần cuối (Second Click)
                         if (detected_rem == 0 or (detected_rem is None and waited > 20)) and not second_click_done:
                             second_click_selectors = [
+                                '#xacthucButton',
                                 'text=BẤM VÀO ĐÂY',
                                 'button:has-text("BẤM VÀO ĐÂY")',
                                 'text=LẤY MÃ NGAY',
                                 'text=NHẬN MÃ',
                                 'text=CLICK ĐỂ LẤY MÃ',
-                                '#xacthucButton',
                                 'span:has-text("LẤY MÃ")'
                             ]
                             for s_sel in second_click_selectors:
@@ -264,7 +319,7 @@ async def grab_traffic_key(
                                 except Exception:
                                     pass
 
-                        # 4. Kiểm tra xem có popup Captcha hình ảnh ngăn cản không
+                        # 5. Kiểm tra xem có popup Captcha hình ảnh ngăn cản không
                         try:
                             if await page.locator('.qcaptcha-container, #captcha-modal, div[id*="qcaptcha"]').count() > 0:
                                 return False, "", "Trang web yêu cầu người dùng phải tự giải Captcha xác thực hình ảnh (qCaptcha)."
