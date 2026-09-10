@@ -140,28 +140,49 @@ async def grab_traffic_key(
                 except Exception:
                     pass
 
-                # 3. Kích hoạt nút bấm lấy mã nếu có
+                # 3. Kích hoạt nút bấm lấy mã (Kiên nhẫn chờ script tiêm nút tối đa 15 giây)
+                if status_callback:
+                    await status_callback("🔍 Đang tìm nút [LẤY MÃ] trên trang web...")
+
                 button_selectors = [
+                    'text=LẤY MÃ',
                     '#xacthucButton',
-                    'button:has-text("LẤY MÃ")',
-                    'button:has-text("Lấy mã")',
                     'span:has-text("LẤY MÃ")',
+                    'button:has-text("LẤY MÃ")',
                     'div:has-text("LẤY MÃ")',
-                    '#show_code_button',
                     'a:has-text("LẤY MÃ")',
+                    '#show_code_button',
+                    'button:has-text("Lấy mã")',
                     'button:has-text("BẤM VÀO ĐÂY")',
-                    'button:has-text("Get Code")'
+                    'text=BẤM VÀO ĐÂY',
+                    'button:has-text("Get Code")',
+                    'text=Get Code',
+                    '[id*="layma"]',
+                    '[id*="traffic"]'
                 ]
+
                 button_found = False
-                for sel in button_selectors:
+                for wait_round in range(7):  # Thử 7 vòng x 2s = 14s để đợi script bên ngoài nạp nút
+                    for sel in button_selectors:
+                        try:
+                            btn = page.locator(sel).first
+                            if await btn.is_visible(timeout=800):
+                                await btn.scroll_into_view_if_needed()
+                                await btn.click(timeout=1500)
+                                button_found = True
+                                if status_callback:
+                                    await status_callback("✅ Đã bấm nút [LẤY MÃ]! Đang kích hoạt đồng hồ...")
+                                break
+                        except Exception:
+                            pass
+                    if button_found:
+                        break
+                    # Cuộn trang xuống dưới để kích hoạt các script yêu cầu cuộn
                     try:
-                        btn = page.locator(sel).first
-                        if await btn.is_visible(timeout=500):
-                            await btn.click(timeout=800)
-                            button_found = True
-                            break
+                        await page.evaluate("window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });")
                     except Exception:
                         pass
+                    await asyncio.sleep(2)
 
                 # Kiểm tra nhanh: nếu trang không có nút và không có bất kỳ dấu hiệu nhiệm vụ lấy mã nào
                 has_task_script = False
@@ -179,11 +200,12 @@ async def grab_traffic_key(
                 if not button_found and not has_task_script:
                     return False, "", "Trang web này không có nút lấy mã hoặc đồng hồ đếm ngược nhiệm vụ."
 
-                # 4. Vòng lặp chờ đếm ngược với thanh tiến trình trực quan
+                # 4. Vòng lặp chờ đếm ngược thông minh (Tự thích ứng thời gian 60s, 82s, 90s, 120s)
                 total_expected_wait = 60
-                max_timeout = 75
-                interval = 3
+                max_timeout = 120
+                interval = 2.5
                 waited = 0
+                second_click_done = False
 
                 while waited < max_timeout:
                     if captured_key["code"]:
@@ -203,18 +225,59 @@ async def grab_traffic_key(
                                 pass
 
                         text_content = await page.evaluate("() => document.body ? document.body.innerText : ''")
+                        
+                        # 1. Bóc tách mã bằng biểu thức chính quy (Regex)
                         match = re.search(r'(?:Mã|Code|Key)(?:\s*của\s*bạn)?\s*[:=]\s*([A-Za-z0-9]{4,12})', text_content, re.IGNORECASE)
                         if match:
                             code_found = match.group(1).strip()
                             if code_found.lower() not in EXCLUDED_KEYWORDS:
                                 return True, code_found, "Đã đọc được mã hiển thị trên trang!"
+
+                        # 2. Đọc động số giây còn lại trên nút hoặc trên bài viết
+                        m_countdown = re.search(r'(?:Lấy mã sau|Chờ|Wait|Còn lại|Sau)\s*(\d{1,3})', text_content, re.IGNORECASE)
+                        detected_rem = None
+                        if m_countdown:
+                            detected_rem = int(m_countdown.group(1))
+                            total_expected_wait = max(total_expected_wait, int(waited + detected_rem))
+                            max_timeout = max(max_timeout, total_expected_wait + 35)
+
+                        # 3. Khi đồng hồ về 0 hoặc biến mất: kiểm tra nút bấm Lần 2 (Second Click)
+                        if (detected_rem == 0 or (detected_rem is None and waited > 20)) and not second_click_done:
+                            second_click_selectors = [
+                                'text=BẤM VÀO ĐÂY',
+                                'button:has-text("BẤM VÀO ĐÂY")',
+                                'text=LẤY MÃ NGAY',
+                                'text=NHẬN MÃ',
+                                'text=CLICK ĐỂ LẤY MÃ',
+                                '#xacthucButton',
+                                'span:has-text("LẤY MÃ")'
+                            ]
+                            for s_sel in second_click_selectors:
+                                try:
+                                    s_btn = page.locator(s_sel).first
+                                    if await s_btn.is_visible(timeout=200):
+                                        await s_btn.click(timeout=1000)
+                                        second_click_done = True
+                                        if status_callback:
+                                            await status_callback("⚡ Đã kích hoạt bước nhận mã cuối cùng...")
+                                        break
+                                except Exception:
+                                    pass
+
+                        # 4. Kiểm tra xem có popup Captcha hình ảnh ngăn cản không
+                        try:
+                            if await page.locator('.qcaptcha-container, #captcha-modal, div[id*="qcaptcha"]').count() > 0:
+                                return False, "", "Trang web yêu cầu người dùng phải tự giải Captcha xác thực hình ảnh (qCaptcha)."
+                        except Exception:
+                            pass
+
                     except Exception:
                         pass
 
                     # Cập nhật thanh tiến trình liên tục để người dùng biết bot đang đếm
                     if status_callback and waited > 0:
-                        prog_bar = make_progress_bar(waited, total_expected_wait)
-                        rem = max(0, total_expected_wait - waited)
+                        rem = detected_rem if detected_rem is not None else max(0, total_expected_wait - int(waited))
+                        prog_bar = make_progress_bar(int(waited), max(total_expected_wait, 1))
                         if rem > 0:
                             await status_callback(f"⏳ {prog_bar} (còn ~{rem}s)")
                         else:
