@@ -57,13 +57,41 @@ class SecurityScanner:
     - Tự động lưu bộ nhớ đệm (Cache 48h) giúp phản hồi 0.01 giây và tiết kiệm 100% quota API.
     """
 
-    @staticmethod
-    def get_api_key() -> str:
-        """Lấy API Key từ biến môi trường hoặc cấu hình trong database."""
-        env_key = os.getenv("VIRUSTOTAL_API_KEY", "").strip()
-        if env_key:
-            return env_key
-        return get_setting("virustotal_api_key", "").strip()
+    _rate_limit_timestamps: list[float] = []
+    _key_index: int = 0
+
+    @classmethod
+    def get_api_keys(cls) -> list[str]:
+        """Lấy danh sách API Key (hỗ trợ xoay vòng nhiều key ngăn cách bởi dấu phẩy)."""
+        raw = os.getenv("VIRUSTOTAL_API_KEY", "").strip() or get_setting("virustotal_api_key", "").strip()
+        if not raw:
+            return []
+        keys = [k.strip() for k in raw.split(",") if k.strip()]
+        return keys
+
+    @classmethod
+    def get_next_api_key(cls) -> str | None:
+        keys = cls.get_api_keys()
+        if not keys:
+            return None
+        key = keys[cls._key_index % len(keys)]
+        cls._key_index = (cls._key_index + 1) % len(keys)
+        return key
+
+    @classmethod
+    def _is_rate_limited(cls) -> bool:
+        """Kiểm tra giới hạn 4 requests / phút của VirusTotal Free Tier."""
+        import time
+        now = time.time()
+        # Loại bỏ các mốc thời gian cũ hơn 60 giây
+        cls._rate_limit_timestamps = [t for t in cls._rate_limit_timestamps if now - t < 60.0]
+        # Nếu đã chạm 4 lượt trong 60 giây qua
+        return len(cls._rate_limit_timestamps) >= 4
+
+    @classmethod
+    def _record_request(cls):
+        import time
+        cls._rate_limit_timestamps.append(time.time())
 
     @classmethod
     async def scan_url(cls, url: str) -> SecurityScanResult:
@@ -78,7 +106,7 @@ class SecurityScanner:
                 risk_level="safe"
             )
 
-        # 1. Kiểm tra Cache trong Database (Tốc độ 0.01s)
+        # 1. Kiểm tra Cache trong Database (Tốc độ 0.01s - Tiết kiệm 100% Quota)
         try:
             cached = get_security_scan(clean_url)
             if cached:
@@ -105,12 +133,36 @@ class SecurityScanner:
         except Exception as e:
             logger.error(f"[Scanner] Cache error: {e}")
 
-        # 2. Quét bằng VirusTotal API v3 nếu có Key
-        api_key = cls.get_api_key()
-        if api_key:
+        # 2. TỐI ƯU HÓA QUOTA: Nếu là tên miền uy tín hàng đầu (Google, Drive, GitHub, Mediafire...)
+        # Không cần gọi VirusTotal để dành trọn 500 lượt/ngày cho link lạ và file nguy hiểm!
+        parsed = urllib.parse.urlparse(clean_url)
+        domain = parsed.netloc.lower().split(":")[0]
+        is_trusted = any(domain == td or domain.endswith("." + td) for td in TRUSTED_DOMAINS)
+        
+        # Chỉ quét VirusTotal đối với các domain lạ hoặc khi link dẫn trực tiếp đến file thực thi (.exe, .apk...)
+        path_lower = parsed.path.lower()
+        is_dangerous_file = any(path_lower.endswith(ext) for ext in DANGEROUS_EXTENSIONS)
+
+        if is_trusted and not is_dangerous_file:
+            heuristic_res = cls._scan_heuristics(clean_url)
+            save_security_scan(
+                clean_url,
+                heuristic_res.is_safe,
+                heuristic_res.malicious_count,
+                heuristic_res.suspicious_count,
+                heuristic_res.total_engines,
+                heuristic_res.scan_badge,
+                heuristic_res.report_url,
+                heuristic_res.scan_details
+            )
+            return heuristic_res
+
+        # 3. Quét bằng VirusTotal API v3 (nếu có Key và chưa chạm 4 req/phút)
+        api_key = cls.get_next_api_key()
+        if api_key and not cls._is_rate_limited():
+            cls._record_request()
             vt_res = await cls._scan_with_virustotal(clean_url, api_key)
             if vt_res:
-                # Lưu vào cache
                 save_security_scan(
                     clean_url,
                     vt_res.is_safe,
@@ -123,7 +175,7 @@ class SecurityScanner:
                 )
                 return vt_res
 
-        # 3. Fallback sang Smart Heuristic Shield (Không cần API key hoặc khi hết quota)
+        # 4. Fallback sang Smart Heuristic Shield (Không chờ đợi, 0đ, không bao giờ bị nghẽn)
         heuristic_res = cls._scan_heuristics(clean_url)
         save_security_scan(
             clean_url,
@@ -201,6 +253,12 @@ class SecurityScanner:
                         )
                     except Exception:
                         pass
+                elif resp.status_code == 429:
+                    logger.warning("[Scanner] VirusTotal API quota exceeded (429), fallback to Heuristic Shield.")
+                    return None
+                elif resp.status_code == 401:
+                    logger.warning("[Scanner] VirusTotal API key unauthorized or unverified (401), fallback to Heuristic Shield.")
+                    return None
         except Exception as e:
             logger.error(f"[Scanner] VirusTotal API error: {e}")
 
