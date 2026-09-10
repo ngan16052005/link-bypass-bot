@@ -275,7 +275,8 @@ async def grab_traffic_key(
 
                         # 3. Yêu cầu chuyển tiếp bài viết (Click Post Requirement)
                         msg_text = await page.evaluate("() => document.querySelector('#message') ? document.querySelector('#message').innerText : ''")
-                        if ("nhấn bài viết" in (msg_text + text_content).lower() or "bài viết bất kỳ" in (msg_text + text_content).lower() or detected_rem == 0) and not post_clicked and waited > 15:
+                        full_check_text = (msg_text + " " + text_content).lower()
+                        if any(phrase in full_check_text for phrase in ["nhấn bài viết", "bài viết bất kỳ", "vui lòng bấm 1 bài viết", "chuyển sang bài viết"]) and not post_clicked and waited > 15:
                             post_clicked = True
                             if status_callback:
                                 await status_callback("⚡ Đang tự động chuyển tiếp sang bài viết xác thực cuối cùng...")
@@ -297,7 +298,7 @@ async def grab_traffic_key(
                                 pass
 
                         # 4. Khi đồng hồ về 0: kiểm tra các nút bấm xác thực lần cuối (Second Click)
-                        if (detected_rem == 0 or (detected_rem is None and waited > 20)) and not second_click_done:
+                        if (detected_rem == 0 or (detected_rem is None and waited >= total_expected_wait)) and not second_click_done:
                             second_click_selectors = [
                                 '#xacthucButton',
                                 'text=BẤM VÀO ĐÂY',
@@ -310,7 +311,8 @@ async def grab_traffic_key(
                             for s_sel in second_click_selectors:
                                 try:
                                     s_btn = page.locator(s_sel).first
-                                    if await s_btn.is_visible(timeout=200):
+                                    if await s_btn.is_visible(timeout=300):
+                                        await s_btn.scroll_into_view_if_needed()
                                         await s_btn.click(timeout=1000)
                                         second_click_done = True
                                         if status_callback:
@@ -319,12 +321,15 @@ async def grab_traffic_key(
                                 except Exception:
                                     pass
 
-                        # 5. Kiểm tra xem có popup Captcha hình ảnh ngăn cản không
-                        try:
-                            if await page.locator('.qcaptcha-container, #captcha-modal, div[id*="qcaptcha"]').count() > 0:
-                                return False, "", "Trang web yêu cầu người dùng phải tự giải Captcha xác thực hình ảnh (qCaptcha)."
-                        except Exception:
-                            pass
+                        # 5. Kiểm tra Captcha xác thực hình ảnh (CHỈ khi đếm xong và popup thực sự nổi trên màn hình)
+                        if second_click_done or waited >= total_expected_wait + 5:
+                            try:
+                                # Chỉ bắt khi container thực sự hiển thị (is_visible) chứ không đếm phần tử ẩn trong DOM
+                                modal = page.locator('#qcaptcha-modal-overlay, #captcha-modal, div[id*="qcaptcha"]:not([style*="display: none"])').first
+                                if await modal.is_visible(timeout=300):
+                                    return False, "", "Trang web yêu cầu người dùng phải tự giải Captcha xác thực hình ảnh (qCaptcha)."
+                            except Exception:
+                                pass
 
                     except Exception:
                         pass
