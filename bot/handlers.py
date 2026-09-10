@@ -24,7 +24,8 @@ from .user_commands import (
     ref_command,
     history_command,
     key_command,
-    do_grab_key
+    do_grab_key,
+    scan_command
 )
 from .admin_commands import (
     stats_command,
@@ -65,6 +66,7 @@ __all__ = [
     "history_command",
     "key_command",
     "do_grab_key",
+    "scan_command",
     "stats_command",
     "broadcast_command",
     "reports_command",

@@ -216,7 +216,7 @@ def migrate_local_to_turso_if_needed():
         local_conn = sqlite3.connect(DB_PATH)
         local_cur = local_conn.cursor()
 
-        tables = ["users", "link_history", "reports", "url_cache", "bypass_cache", "bot_settings", "user_limits", "referrals"]
+        tables = ["users", "link_history", "reports", "url_cache", "bypass_cache", "bot_settings", "user_limits", "referrals", "security_scans"]
         with get_db() as conn:
             for table in tables:
                 try:
@@ -326,6 +326,23 @@ def init_db():
         )
         """)
         cursor.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)")
+
+        # Bảng kết quả quét virus & bảo mật tệp tin (Security Shield Cache)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS security_scans (
+            url_hash TEXT PRIMARY KEY,
+            url TEXT,
+            is_safe INTEGER,
+            malicious_count INTEGER,
+            suspicious_count INTEGER,
+            total_engines INTEGER,
+            scan_badge TEXT,
+            report_url TEXT,
+            scan_details TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_security_scans_created ON security_scans(created_at)")
         # Đảm bảo bảng link_history có cột result_url
         try:
             cursor.execute("ALTER TABLE link_history ADD COLUMN result_url TEXT")
@@ -506,6 +523,64 @@ def save_cached_bypass(original_url: str, result_url: str, engine: str = ""):
             conn.commit()
     except Exception as e:
         print(f"[DB] save_cached_bypass error: {e}")
+
+def get_security_scan(url: str) -> dict | None:
+    """
+    Lấy kết quả quét virus bảo mật đã lưu trong bộ nhớ đệm (Hạn sử dụng: 48 giờ).
+    """
+    try:
+        import hashlib
+        clean_url = url.strip()
+        url_hash = hashlib.sha256(clean_url.encode("utf-8")).hexdigest()
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            SELECT url, is_safe, malicious_count, suspicious_count, total_engines, scan_badge, report_url, scan_details
+            FROM security_scans
+            WHERE url_hash = ? AND created_at >= datetime('now', '-2 days')
+            """, (url_hash,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "url": row["url"],
+                    "is_safe": bool(row["is_safe"]),
+                    "malicious_count": int(row["malicious_count"]),
+                    "suspicious_count": int(row["suspicious_count"]),
+                    "total_engines": int(row["total_engines"]),
+                    "scan_badge": row["scan_badge"],
+                    "report_url": row["report_url"] or "",
+                    "scan_details": row["scan_details"] or ""
+                }
+    except Exception as e:
+        print(f"[DB] get_security_scan error: {e}")
+    return None
+
+def save_security_scan(url: str, is_safe: bool, malicious_count: int, suspicious_count: int, total_engines: int, scan_badge: str, report_url: str = "", scan_details: str = ""):
+    """
+    Lưu kết quả quét virus vào cache hệ thống. Tự động dọn dẹp kết quả cũ hơn 7 ngày.
+    """
+    try:
+        import hashlib
+        clean_url = url.strip()
+        if not clean_url:
+            return
+        url_hash = hashlib.sha256(clean_url.encode("utf-8")).hexdigest()
+        with get_db() as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+            INSERT OR REPLACE INTO security_scans 
+            (url_hash, url, is_safe, malicious_count, suspicious_count, total_engines, scan_badge, report_url, scan_details, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            """, (
+                url_hash, clean_url, 1 if is_safe else 0,
+                malicious_count, suspicious_count, total_engines,
+                scan_badge, report_url, scan_details
+            ))
+            # Dọn dẹp cache quét cũ hơn 7 ngày
+            cursor.execute("DELETE FROM security_scans WHERE created_at < datetime('now', '-7 days')")
+            conn.commit()
+    except Exception as e:
+        print(f"[DB] save_security_scan error: {e}")
 
 def get_setting(key: str, default: str = "") -> str:
     try:

@@ -21,9 +21,9 @@ def get_url_from_key(key: str) -> str | None:
     return None
 
 
-def get_result_keyboard(target_url: str) -> InlineKeyboardMarkup:
+def get_result_keyboard(target_url: str, report_url: str = "") -> InlineKeyboardMarkup:
     """
-    Tạo bàn phím nút bấm mở nhanh link đích trên trình duyệt và nút tạo mã QR Code.
+    Tạo bàn phím nút bấm mở nhanh link đích trên trình duyệt, nút tạo mã QR Code và báo cáo VirusTotal.
     """
     short_key = get_short_key(target_url)
     keyboard = [
@@ -32,6 +32,10 @@ def get_result_keyboard(target_url: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton("📱 Tạo Mã QR", callback_data=f"qr:{short_key}")
         ]
     ]
+    if report_url:
+        keyboard.append([
+            InlineKeyboardButton("🛡️ Xem Báo Cáo VirusTotal", url=report_url)
+        ])
     return InlineKeyboardMarkup(keyboard)
 
 def get_fail_keyboard(url: str, is_task_shortener: bool = False) -> InlineKeyboardMarkup:

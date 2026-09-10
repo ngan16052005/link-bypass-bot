@@ -18,6 +18,7 @@ HELP_MESSAGE = (
     "📖 <b>HƯỚNG DẪN SỬ DỤNG CHI TIẾT:</b>\n\n"
     "🔹 <b>Vượt link rút gọn:</b> Dán bất kỳ link rút gọn nào vào chat -> Nhận link gốc trực tiếp.\n"
     "🔹 <b>Tự động lấy Mã / Key 60 giây:</b> Dán link bài viết hoặc gõ <code>/key [link_bài_viết]</code>\n"
+    "🔹 <b>Quét virus & mã độc link/file:</b> Gõ <code>/scan [link]</code> hoặc reply tin nhắn chứa link.\n"
     "🔹 <b>Xem danh sách link hỗ trợ:</b> Bấm <b>[🌐 Dịch Vụ Hỗ Trợ]</b> hoặc gõ <code>/services</code>\n"
     "🔹 <b>Xem ID Telegram của bạn:</b> Gõ <code>/myid</code>\n"
     "🔹 <b>Báo lỗi link hỏng:</b> Bấm nút <b>[📢 Báo Lỗi Cho Admin]</b> khi gặp link không vượt được."

@@ -44,6 +44,7 @@ from bot.handlers import (
     setchannel_command,
     togglefsub_command,
     key_command,
+    scan_command,
     callback_router,
     handle_message,
     handle_document,
@@ -190,6 +191,7 @@ def main():
     app.add_handler(CommandHandler("setchannel", setchannel_command))
     app.add_handler(CommandHandler("togglefsub", togglefsub_command))
     app.add_handler(CommandHandler("key", key_command))
+    app.add_handler(CommandHandler("scan", scan_command))
     app.add_handler(CallbackQueryHandler(callback_router))
     app.add_handler(InlineQueryHandler(inline_query_handler))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))

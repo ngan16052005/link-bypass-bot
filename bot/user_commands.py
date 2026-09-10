@@ -1,6 +1,6 @@
 import html
 import logging
-from telegram import Update
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 
@@ -14,6 +14,8 @@ from core.database import (
     get_user_history
 )
 from core.engine_traffic_key import grab_traffic_key
+from core.security_scanner import SecurityScanner
+from .utils import extract_urls
 from .texts import (
     WELCOME_MESSAGE,
     HELP_MESSAGE,
@@ -306,3 +308,82 @@ async def key_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=ParseMode.HTML
     )
     await do_grab_key(status_msg, url, user.id if user else 0)
+
+
+async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Quét mã độc và virus của liên kết thông qua VirusTotal API v3 & Smart Heuristic Shield.
+    """
+    user = update.effective_user
+    if user:
+        log_user(user.id, user.username, user.first_name)
+
+    # 1. Trích xuất URL từ args hoặc reply message
+    target_url = None
+    if context.args and len(context.args) > 0:
+        target_url = context.args[0].strip()
+    elif update.message.reply_to_message and update.message.reply_to_message.text:
+        found_urls = extract_urls(update.message.reply_to_message.text)
+        if found_urls:
+            target_url = found_urls[0]
+
+    if not target_url:
+        await update.message.reply_text(
+            "🛡️ <b>HƯỚNG DẪN QUÉT BẢO MẬT VIRUSTOTAL SHIELD:</b>\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "Kiểm tra độ an toàn của bất kỳ liên kết hoặc tệp tin nào trước khi tải về:\n\n"
+            "• <b>Cách 1:</b> Gõ <code>/scan [link_cần_kiểm_tra]</code>\n"
+            "  <i>(Ví dụ: <code>/scan https://example.com/setup.exe</code>)</i>\n\n"
+            "• <b>Cách 2:</b> <b>Reply (trả lời)</b> bất kỳ tin nhắn nào chứa link và gõ <code>/scan</code>.\n\n"
+            "⚡ <i>Hệ thống sẽ đối chiếu dữ liệu từ hơn 70 hãng bảo mật hàng đầu (Kaspersky, BitDefender, Microsoft Defender...)!</i>",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    escaped_url = html.escape(target_url)
+    status_msg = await update.message.reply_text(
+        f"🛡️ Đang kiểm tra an toàn cho liên kết:\n<code>{escaped_url}</code>\n"
+        f"<i>Đang gửi dữ liệu tới VirusTotal Security Shield...</i>",
+        parse_mode=ParseMode.HTML
+    )
+
+    try:
+        scan_res = await SecurityScanner.scan_url(target_url)
+
+        risk_text = {
+            "safe": "🟢 Rất thấp (An toàn)",
+            "suspicious": "🟡 Trung bình (Cần cẩn trọng)",
+            "danger": "🔴 RẤT CAO (Phát hiện mã độc/Lừa đảo!)"
+        }.get(scan_res.risk_level, "🟢 An toàn")
+
+        engine_info = f"<code>{scan_res.total_engines}</code> hệ thống" if scan_res.total_engines > 0 else "Smart Heuristic Engine"
+
+        res_msg = (
+            f"🛡️ <b>KẾT QUẢ PHÂN TÍCH BẢO MẬT (VIRUSTOTAL)</b>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"🔗 <b>Liên kết:</b>\n<code>{escaped_url}</code>\n\n"
+            f"📊 <b>Đánh giá:</b> {scan_res.scan_badge}\n"
+            f"🎯 <b>Mức độ rủi ro:</b> <b>{risk_text}</b>\n"
+            f"🔍 <b>Hệ thống bảo mật:</b> {engine_info}\n"
+            f"🚨 <b>Phát hiện độc hại:</b> <code>{scan_res.malicious_count}</code>\n"
+            f"⚠️ <b>Gắn cờ nghi vấn:</b> <code>{scan_res.suspicious_count}</code>\n\n"
+            f"📌 <b>Chi tiết:</b>\n<i>{html.escape(scan_res.scan_details)}</i>\n"
+            f"━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 <i>Mẹo: Tuyệt đối không mở các tệp tin lạ có cảnh báo nguy hiểm hoặc yêu cầu tắt Antivirus trên máy tính!</i>"
+        )
+
+        buttons = []
+        if scan_res.report_url:
+            buttons.append([InlineKeyboardButton("🛡️ Xem Chi Tiết Trên VirusTotal", url=scan_res.report_url)])
+        if scan_res.is_safe:
+            buttons.append([InlineKeyboardButton("🌐 Mở Liên Kết An Toàn", url=target_url)])
+
+        reply_markup = InlineKeyboardMarkup(buttons) if buttons else None
+        await status_msg.edit_text(res_msg, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
+
+    except Exception as e:
+        logger.error(f"[Scan Command] Error: {e}")
+        await status_msg.edit_text(
+            f"⚠️ Có lỗi xảy ra trong quá trình quét bảo mật: <code>{html.escape(str(e))}</code>",
+            parse_mode=ParseMode.HTML
+        )

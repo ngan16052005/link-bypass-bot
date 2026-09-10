@@ -24,6 +24,7 @@ from core.database import (
 )
 from core.bypass_manager import BypassManager
 from core.link_enricher import clean_url, fetch_file_metadata
+from core.security_scanner import SecurityScanner
 from .texts import TASK_SHORTENER_DOMAINS, SERVICES_MESSAGE
 from .fsub import check_user_fsub
 from .utils import extract_urls
@@ -199,6 +200,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if meta.get("has_info"):
                     file_info_str = f"📁 <b>Tệp tin:</b> <code>{html.escape(meta['file_name'])}</code> ({meta['file_size']})\n"
 
+                # 6. Quét bảo mật VirusTotal & Smart Heuristic Shield
+                security_str = ""
+                report_url = ""
+                try:
+                    scan_res = await asyncio.wait_for(SecurityScanner.scan_url(clean_target), timeout=3.5)
+                    if scan_res:
+                        security_str = f"🛡️ <b>Bảo mật (VirusTotal):</b> {scan_res.scan_badge}\n"
+                        report_url = scan_res.report_url
+                except Exception as scan_err:
+                    logger.error(f"[Scan] Scan error: {scan_err}")
+
                 log_action(user.id if user else 0, url, "bypass", "success", result.engine_used, result_url=clean_target)
 
                 quota_str = ""
@@ -210,6 +222,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     f"🔗 <b>Link ban đầu:</b>\n<code>{html.escape(result.original_url)}</code>\n\n"
                     f"🎯 <b>Link đích:</b>\n<code>{html.escape(clean_target)}</code>\n\n"
                     f"{file_info_str}"
+                    f"{security_str}"
                     f"⚡ <b>Phương thức:</b> <code>{html.escape(result.engine_used)}</code>\n"
                     f"⏱️ <b>Thời gian xử lý:</b> <code>{result.time_taken}s</code>"
                     f"{quota_str}"
@@ -217,7 +230,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await status_msg.edit_text(
                     msg_text,
                     parse_mode=ParseMode.HTML,
-                    reply_markup=get_result_keyboard(clean_target)
+                    reply_markup=get_result_keyboard(clean_target, report_url=report_url)
                 )
             else:
                 log_action(user.id if user else 0, url, "bypass", "fail")
