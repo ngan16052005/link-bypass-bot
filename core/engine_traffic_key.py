@@ -274,31 +274,59 @@ async def grab_traffic_key(
                                 total_wait_fixed = True
 
                         # 3. Yêu cầu chuyển tiếp bài viết (Click Post Requirement)
-                        msg_text = await page.evaluate("() => document.querySelector('#message') ? document.querySelector('#message').innerText : ''")
+                        msg_text = await page.evaluate("() => document.querySelector('#message, #traffic_message, .tracking-message') ? document.querySelector('#message, #traffic_message, .tracking-message').innerText : ''")
                         full_check_text = (msg_text + " " + text_content).lower()
-                        if any(phrase in full_check_text for phrase in ["nhấn bài viết", "bài viết bất kỳ", "vui lòng bấm 1 bài viết", "chuyển sang bài viết"]) and not post_clicked and waited > 15:
+                        if any(phrase in full_check_text for phrase in ["nhấn bài viết", "bài viết bất kỳ", "vui lòng bấm 1 bài viết", "chuyển sang bài viết", "click 1 lần bài viết", "click đủ 2 lần"]) and not post_clicked and waited > 15:
                             post_clicked = True
                             if status_callback:
                                 await status_callback("⚡ Đang tự động chuyển tiếp sang bài viết xác thực cuối cùng...")
                             try:
-                                current_host = urlparse(page.url).netloc
-                                links = await page.locator('article a, .entry-title a, h2 a, h3 a, a[href*="/vi-vn/"]').all()
-                                for l in links:
-                                    try:
-                                        h = await l.get_attribute("href")
-                                        if h and current_host in h and h.rstrip("/") != page.url.rstrip("/"):
-                                            await l.click()
-                                            await page.wait_for_load_state("domcontentloaded", timeout=12000)
-                                            await asyncio.sleep(1.5)
-                                            await page.evaluate("window.scrollTo(0, document.body.scrollHeight);")
-                                            break
-                                    except Exception:
-                                        continue
+                                target_url = await page.evaluate(r"""() => {
+                                    const currentHost = window.location.host;
+                                    const currentPath = window.location.pathname.replace(/\/$/, '');
+                                    const currentOrigin = window.location.origin;
+                                    const links = Array.from(document.querySelectorAll('a[href]'));
+                                    
+                                    for (const a of links) {
+                                        try {
+                                            const u = new URL(a.href, currentOrigin);
+                                            if (u.host === currentHost) {
+                                                const p = u.pathname.replace(/\/$/, '');
+                                                if (p && p !== currentPath && !p.includes('wp-admin') && !p.includes('wp-login') && !p.includes('feed') && !u.hash) {
+                                                    const ext = p.split('.').pop().toLowerCase();
+                                                    if (!['png', 'jpg', 'jpeg', 'webp', 'gif', 'svg', 'pdf', 'zip'].includes(ext)) {
+                                                        return a.href;
+                                                    }
+                                                }
+                                            }
+                                        } catch (e) {}
+                                    }
+                                    return null;
+                                }""")
+                                
+                                if target_url:
+                                    await page.goto(target_url, wait_until="domcontentloaded", timeout=15000)
+                                    await asyncio.sleep(2)
+                                    # Cuộn xuống đáy bài viết thứ 2 để kích hoạt yêu cầu "kéo xuống dưới cùng"
+                                    for _ in range(4):
+                                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight); window.dispatchEvent(new Event('scroll'));")
+                                        await asyncio.sleep(0.8)
+                                    # Cấp thêm thời gian và reset cờ để xử lý nhận mã ở bài viết thứ 2
+                                    second_click_done = False
+                                    max_timeout = max(max_timeout, int(waited) + 75)
+                                    total_expected_wait = int(waited) + 30
+                                    total_wait_fixed = False
+                                    if status_callback:
+                                        await status_callback("📜 Đã sang bài viết thứ 2! Đang cuộn đáy kích hoạt lấy mã...")
                             except Exception:
                                 pass
 
-                        # 4. Khi đồng hồ về 0: kiểm tra các nút bấm xác thực lần cuối (Second Click)
-                        if (detected_rem == 0 or (detected_rem is None and waited >= total_expected_wait)) and not second_click_done:
+                        # 4. Khi đồng hồ về 0 hoặc đã sang bài viết thứ 2: kiểm tra các nút bấm xác thực lần cuối (Second Click)
+                        can_click_second = (
+                            (detected_rem == 0 or (detected_rem is None and waited >= total_expected_wait))
+                            or (post_clicked and waited > 20)
+                        )
+                        if can_click_second and not second_click_done:
                             second_click_selectors = [
                                 '#xacthucButton',
                                 'text=BẤM VÀO ĐÂY',
@@ -327,6 +355,14 @@ async def grab_traffic_key(
                                 # Chỉ bắt khi container thực sự hiển thị (is_visible) chứ không đếm phần tử ẩn trong DOM
                                 modal = page.locator('#qcaptcha-modal-overlay, #captcha-modal, div[id*="qcaptcha"]:not([style*="display: none"])').first
                                 if await modal.is_visible(timeout=300):
+                                    try:
+                                        content_el = page.locator('#qcaptcha-modal-content').first
+                                        if await content_el.is_visible():
+                                            await content_el.screenshot(path="scratch/captcha_box.png")
+                                        else:
+                                            await page.screenshot(path="scratch/captcha_box.png")
+                                    except Exception:
+                                        pass
                                     return False, "", "Trang web yêu cầu người dùng phải tự giải Captcha xác thực hình ảnh (qCaptcha)."
                             except Exception:
                                 pass
@@ -345,6 +381,11 @@ async def grab_traffic_key(
 
                     await asyncio.sleep(interval)
                     waited += interval
+
+                try:
+                    await page.screenshot(path="scratch/current_screen_at_60s.png")
+                except Exception:
+                    pass
 
                 if captured_key["code"]:
                     return True, captured_key["code"], "Đã nhận được mã!"
